@@ -22,6 +22,9 @@ describe("captureToAccelerator", () => {
   it("default constant sanity", () => {
     expect(DEFAULT_QUICK_SAVE).toBe("CmdOrCtrl+Shift+S");
   });
+  it("space maps to Space token", () => {
+    expect(captureToAccelerator({ ...base, key: " ", code: "Space", metaKey: true })).toBe("CmdOrCtrl+Space");
+  });
   it("quick find constant", () => {
     expect(DEFAULT_QUICK_FIND).toBe("CmdOrCtrl+Shift+O");
   });

@@ -24,7 +24,7 @@ function keyFromCode(code: string): string | null {
   }
 
   const codeMap: Record<string, string> = {
-    Space: " ",
+    Space: "Space",
     Minus: "-",
     Equal: "=",
     Comma: ",",
