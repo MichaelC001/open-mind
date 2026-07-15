@@ -108,6 +108,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/{id}/highlights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listItemHighlights"];
+        put?: never;
+        post: operations["createItemHighlight"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/highlights/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteHighlight"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets": {
         parameters: {
             query?: never;
@@ -453,6 +485,30 @@ export interface components {
         };
         ItemDetail: components["schemas"]["Item"] & {
             body: string;
+        };
+        Highlight: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            sourceItemId: string;
+            /** Format: uuid */
+            quoteItemId: string;
+            exact: string;
+            prefix: string;
+            suffix: string;
+            offsetHint: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        CreateHighlightRequest: {
+            exact: string;
+            prefix?: string;
+            suffix?: string;
+            offsetHint?: number;
+        };
+        CreateHighlightResponse: {
+            highlight: components["schemas"]["Highlight"];
+            quoteItem: components["schemas"]["Item"];
         };
         /** @description Fields to update on an item. Both userTags and pinned are optional; omit both for a no-op edit that is rejected as a bad request. */
         UpdateItemRequest: {
@@ -898,6 +954,102 @@ export interface operations {
             };
             /** @description item has no body to send */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listItemHighlights: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Highlights anchored to this item, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Highlight"][];
+                };
+            };
+            /** @description unknown item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createItemHighlight: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateHighlightRequest"];
+            };
+        };
+        responses: {
+            /** @description Highlight created, with its mirrored quote card. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateHighlightResponse"];
+                };
+            };
+            /** @description Invalid request (empty exact, over caps). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description unknown item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteHighlight: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Highlight and its quote card removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description unknown highlight */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

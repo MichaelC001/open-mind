@@ -1,9 +1,17 @@
 import { tokens } from "@openmind/ui";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { HighlightableBody } from "../../../../components/HighlightableBody";
 import { apiFetch } from "../../../../lib/api";
 import { cardKind, domainOf, typeLabel } from "../../../../lib/cards";
 import type { ItemDetail } from "../../../../lib/types";
+
+/** Text-forward types worth painting highlights over — mirrors the "Read"
+ * affordance's `readableBody` condition on the item detail page. */
+function textForward(item: ItemDetail): boolean {
+  const kind = cardKind(item.cardType);
+  return kind === "article" || kind === "product" || kind === "book" || kind === "recipe" || kind === "note";
+}
 
 const { color, font } = tokens;
 
@@ -111,21 +119,25 @@ export default async function ReaderPage({ params }: { params: Promise<{ id: str
         )}
 
         {paragraphs.length > 0 ? (
-          paragraphs.map((p, i) => (
-            <p
-              key={i}
-              className="serif"
-              style={{
-                fontSize: 19,
-                lineHeight: 1.85,
-                color: color.ink,
-                margin: "0 0 1.5rem",
-                whiteSpace: "pre-wrap",
-              }}
-            >
-              {p}
-            </p>
-          ))
+          textForward(item) ? (
+            <HighlightableBody body={body} itemId={item.id} />
+          ) : (
+            paragraphs.map((p, i) => (
+              <p
+                key={i}
+                className="serif"
+                style={{
+                  fontSize: 19,
+                  lineHeight: 1.85,
+                  color: color.ink,
+                  margin: "0 0 1.5rem",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {p}
+              </p>
+            ))
+          )
         ) : (
           <p style={{ fontFamily: font.sans, fontSize: 15, lineHeight: 1.7, color: color.inkMuted }}>
             {item.status === "pending"

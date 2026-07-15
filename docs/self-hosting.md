@@ -204,6 +204,10 @@ Tags you enter are canonicalised on save: trimmed, lowercased, deduplicated, cap
 
 > Caveat: tag search uses `array_to_tsvector`, which indexes tags as literal lexemes without English stemming. A single-morpheme tag like `mine` matches a search for `mine`; a tag like `favourite` will not match a query for `favourite` if Postgres's English text-search config would otherwise stem it to a different form. Exact tag lookups are unaffected.
 
+## Highlights
+
+Select text in the reader view (`/item/{id}/read`) and click the floating **Highlight** button: the selection is painted in the article and mirrored as a **quote card** — a first-class item, searchable and taggable, linked to the source article. Highlights re-anchor by text (not raw offsets), so they survive re-extraction; if the underlying text changes, the paint disappears but the quote card lives on. Deleting the quote card removes the highlight; `DELETE /highlights/{id}` removes both.
+
 ## Desk (pinboard)
 
 Pin whatever you're actively working with to a Desk — a small board separate from your full library, for the handful of items you want one click away right now.

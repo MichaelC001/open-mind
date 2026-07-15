@@ -33,6 +33,9 @@ func TestGuardedPredicate(t *testing.T) {
 		{http.MethodDelete, "/api-keys/3f1a2b4c-0000-0000-0000-000000000000", true},
 		{http.MethodPost, "/device-links", true},
 		{http.MethodPost, "/device-links/claim", true},
+		{http.MethodPost, "/items/3f1a2b4c-0000-0000-0000-000000000000/highlights", true},
+		{http.MethodDelete, "/highlights/3f1a2b4c-0000-0000-0000-000000000000", true},
+		{http.MethodGet, "/items/3f1a2b4c-0000-0000-0000-000000000000/highlights", false},
 	}
 	for _, c := range cases {
 		if got := guarded(c.method, c.path); got != c.want {

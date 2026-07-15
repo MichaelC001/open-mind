@@ -132,6 +132,20 @@ type CreateFeedRequest struct {
 	Url string `json:"url"`
 }
 
+// CreateHighlightRequest defines model for CreateHighlightRequest.
+type CreateHighlightRequest struct {
+	Exact      string  `json:"exact"`
+	OffsetHint *int    `json:"offsetHint,omitempty"`
+	Prefix     *string `json:"prefix,omitempty"`
+	Suffix     *string `json:"suffix,omitempty"`
+}
+
+// CreateHighlightResponse defines model for CreateHighlightResponse.
+type CreateHighlightResponse struct {
+	Highlight Highlight `json:"highlight"`
+	QuoteItem Item      `json:"quoteItem"`
+}
+
 // CreateItemRequest Exactly one of url or note must be provided.
 type CreateItemRequest struct {
 	Note *string `json:"note,omitempty"`
@@ -187,6 +201,18 @@ type Feed struct {
 	SiteUrl    string `json:"siteUrl"`
 	Title      string `json:"title"`
 	Url        string `json:"url"`
+}
+
+// Highlight defines model for Highlight.
+type Highlight struct {
+	CreatedAt    time.Time          `json:"createdAt"`
+	Exact        string             `json:"exact"`
+	Id           openapi_types.UUID `json:"id"`
+	OffsetHint   int                `json:"offsetHint"`
+	Prefix       string             `json:"prefix"`
+	QuoteItemId  openapi_types.UUID `json:"quoteItemId"`
+	SourceItemId openapi_types.UUID `json:"sourceItemId"`
+	Suffix       string             `json:"suffix"`
 }
 
 // ImportResult Summary of a bulk import.
@@ -380,6 +406,9 @@ type CreateItemJSONRequestBody = CreateItemRequest
 // PatchItemJSONRequestBody defines body for PatchItem for application/json ContentType.
 type PatchItemJSONRequestBody = UpdateItemRequest
 
+// CreateItemHighlightJSONRequestBody defines body for CreateItemHighlight for application/json ContentType.
+type CreateItemHighlightJSONRequestBody = CreateHighlightRequest
+
 // CreateItemLinkJSONRequestBody defines body for CreateItemLink for application/json ContentType.
 type CreateItemLinkJSONRequestBody CreateItemLinkJSONBody
 
@@ -437,6 +466,9 @@ type ServerInterface interface {
 	// (GET /healthz)
 	GetHealthz(w http.ResponseWriter, r *http.Request)
 
+	// (DELETE /highlights/{id})
+	DeleteHighlight(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+
 	// (POST /import)
 	ImportItems(w http.ResponseWriter, r *http.Request)
 
@@ -454,6 +486,12 @@ type ServerInterface interface {
 
 	// (PATCH /items/{id})
 	PatchItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+
+	// (GET /items/{id}/highlights)
+	ListItemHighlights(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+
+	// (POST /items/{id}/highlights)
+	CreateItemHighlight(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// Send this item to Kindle as an EPUB
 	// (POST /items/{id}/kindle)
 	SendItemToKindle(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
@@ -571,6 +609,11 @@ func (_ Unimplemented) GetHealthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// (DELETE /highlights/{id})
+func (_ Unimplemented) DeleteHighlight(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // (POST /import)
 func (_ Unimplemented) ImportItems(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -598,6 +641,16 @@ func (_ Unimplemented) GetItem(w http.ResponseWriter, r *http.Request, id openap
 
 // (PATCH /items/{id})
 func (_ Unimplemented) PatchItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (GET /items/{id}/highlights)
+func (_ Unimplemented) ListItemHighlights(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (POST /items/{id}/highlights)
+func (_ Unimplemented) CreateItemHighlight(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1007,6 +1060,37 @@ func (siw *ServerInterfaceWrapper) GetHealthz(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteHighlight operation middleware
+func (siw *ServerInterfaceWrapper) DeleteHighlight(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteHighlight(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ImportItems operation middleware
 func (siw *ServerInterfaceWrapper) ImportItems(w http.ResponseWriter, r *http.Request) {
 
@@ -1164,6 +1248,68 @@ func (siw *ServerInterfaceWrapper) PatchItem(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PatchItem(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListItemHighlights operation middleware
+func (siw *ServerInterfaceWrapper) ListItemHighlights(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListItemHighlights(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateItemHighlight operation middleware
+func (siw *ServerInterfaceWrapper) CreateItemHighlight(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateItemHighlight(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1709,6 +1855,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/healthz", wrapper.GetHealthz)
 	})
 	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/highlights/{id}", wrapper.DeleteHighlight)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/import", wrapper.ImportItems)
 	})
 	r.Group(func(r chi.Router) {
@@ -1725,6 +1874,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/items/{id}", wrapper.PatchItem)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/items/{id}/highlights", wrapper.ListItemHighlights)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/items/{id}/highlights", wrapper.CreateItemHighlight)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/items/{id}/kindle", wrapper.SendItemToKindle)

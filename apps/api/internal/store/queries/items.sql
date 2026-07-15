@@ -70,3 +70,6 @@ UPDATE items SET url = $3 WHERE user_id = $1 AND id = $2;
 
 -- name: SetItemPageCount :exec
 UPDATE items SET page_count = $3 WHERE user_id = $1 AND id = $2;
+
+-- name: CreateQuoteItem :one
+INSERT INTO items (user_id, body, card_type, url) VALUES ($1, $2, 'quote', '') RETURNING *;

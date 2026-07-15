@@ -53,6 +53,18 @@ type Feed struct {
 	LastModified string
 }
 
+type Highlight struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	SourceItemID uuid.UUID
+	QuoteItemID  uuid.UUID
+	Exact        string
+	Prefix       string
+	Suffix       string
+	OffsetHint   int32
+	CreatedAt    pgtype.Timestamptz
+}
+
 type Item struct {
 	ID            uuid.UUID
 	UserID        uuid.UUID
