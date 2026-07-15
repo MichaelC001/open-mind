@@ -1,7 +1,11 @@
 mod grab;
 mod settings;
 
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fs;
+use std::str::FromStr;
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -16,6 +20,12 @@ const PRIMARY_MODIFIER: Modifiers = Modifiers::SUPER;
 #[cfg(not(target_os = "macos"))]
 const PRIMARY_MODIFIER: Modifiers = Modifiers::CONTROL;
 
+// Accelerator strings for the built-in defaults, in the same "+"-joined
+// format the global-shortcut plugin's `Shortcut: FromStr` parses (and the
+// format `Shortcut`'s `Display` produces — see `parse_accelerator_pair`).
+const DEFAULT_QUICK_SAVE_ACCEL: &str = "CmdOrCtrl+Shift+S";
+const DEFAULT_QUICK_FIND_ACCEL: &str = "CmdOrCtrl+Shift+O";
+
 fn quick_save_shortcut() -> Shortcut {
     Shortcut::new(Some(PRIMARY_MODIFIER | Modifiers::SHIFT), Code::KeyS)
 }
@@ -23,6 +33,126 @@ fn quick_save_shortcut() -> Shortcut {
 fn toggle_panel_shortcut() -> Shortcut {
     Shortcut::new(Some(PRIMARY_MODIFIER | Modifiers::SHIFT), Code::KeyO)
 }
+
+/// Managed state: the currently-active (quick_save, quick_find) shortcuts,
+/// consulted by both startup registration and the handler's matching so a
+/// rebind takes effect without a restart.
+type ShortcutsState = Mutex<(Shortcut, Shortcut)>;
+
+#[derive(Serialize)]
+struct ShortcutPair {
+    quick_save: String,
+    quick_find: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedShortcuts {
+    quick_save: String,
+    quick_find: String,
+}
+
+/// Pure parse of the two accelerator strings, falling back per-field to the
+/// built-in default on a parse failure (never lets one bad field take down
+/// the other). Never logs the accelerator value itself.
+fn parse_accelerator_pair(qs: &str, qf: &str) -> (Shortcut, Shortcut) {
+    let quick_save = Shortcut::from_str(qs).unwrap_or_else(|_| {
+        log::warn!("quick_save accelerator failed to parse — using default");
+        quick_save_shortcut()
+    });
+    let quick_find = Shortcut::from_str(qf).unwrap_or_else(|_| {
+        log::warn!("quick_find accelerator failed to parse — using default");
+        toggle_panel_shortcut()
+    });
+    (quick_save, quick_find)
+}
+
+fn shortcuts_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("shortcuts.json"))
+}
+
+/// Loads the persisted shortcut pair from `shortcuts.json` in the app config
+/// dir, falling back to the built-in defaults when the file is missing or
+/// unparsable (`log::warn!`, never the raw file contents).
+fn load_shortcuts(app: &AppHandle) -> (Shortcut, Shortcut) {
+    let Some(path) = shortcuts_path(app) else {
+        return parse_accelerator_pair(DEFAULT_QUICK_SAVE_ACCEL, DEFAULT_QUICK_FIND_ACCEL);
+    };
+    let contents = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => {
+            return parse_accelerator_pair(DEFAULT_QUICK_SAVE_ACCEL, DEFAULT_QUICK_FIND_ACCEL);
+        }
+    };
+    match serde_json::from_str::<PersistedShortcuts>(&contents) {
+        Ok(persisted) => parse_accelerator_pair(&persisted.quick_save, &persisted.quick_find),
+        Err(e) => {
+            log::warn!("shortcuts.json failed to parse: {e}");
+            parse_accelerator_pair(DEFAULT_QUICK_SAVE_ACCEL, DEFAULT_QUICK_FIND_ACCEL)
+        }
+    }
+}
+
+fn write_shortcuts(app: &AppHandle, quick_save: &str, quick_find: &str) {
+    let Some(path) = shortcuts_path(app) else { return };
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    let persisted = PersistedShortcuts {
+        quick_save: quick_save.to_string(),
+        quick_find: quick_find.to_string(),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&persisted) {
+        let _ = fs::write(path, json);
+    }
+}
+
+#[tauri::command]
+fn get_shortcuts(state: tauri::State<ShortcutsState>) -> ShortcutPair {
+    let (quick_save, quick_find) = *state.lock().unwrap();
+    ShortcutPair { quick_save: quick_save.to_string(), quick_find: quick_find.to_string() }
+}
+
+/// Parses both accelerators, swaps the global registrations, and persists on
+/// success. On any registration failure (e.g. the combo is already owned by
+/// another app) it best-effort restores the previous pair and returns a
+/// field-agnostic error — never leaves the app with no shortcuts registered.
+#[tauri::command]
+fn rebind_shortcuts(
+    app: AppHandle,
+    state: tauri::State<ShortcutsState>,
+    quick_save: String,
+    quick_find: String,
+) -> Result<(), String> {
+    let new_save = Shortcut::from_str(&quick_save).map_err(|_| INVALID_SHORTCUT_MSG.to_string())?;
+    let new_find = Shortcut::from_str(&quick_find).map_err(|_| INVALID_SHORTCUT_MSG.to_string())?;
+
+    let mut guard = state.lock().unwrap();
+    let (old_save, old_find) = *guard;
+
+    let gs = app.global_shortcut();
+    let _ = gs.unregister(old_save);
+    let _ = gs.unregister(old_find);
+
+    let registered = gs.register(new_save).and_then(|()| gs.register(new_find));
+
+    match registered {
+        Ok(()) => {
+            *guard = (new_save, new_find);
+            drop(guard);
+            write_shortcuts(&app, &quick_save, &quick_find);
+            Ok(())
+        }
+        Err(_) => {
+            let _ = gs.unregister(new_save);
+            let _ = gs.unregister(new_find);
+            let _ = gs.register(old_save);
+            let _ = gs.register(old_find);
+            Err(INVALID_SHORTCUT_MSG.to_string())
+        }
+    }
+}
+
+const INVALID_SHORTCUT_MSG: &str = "that combination is taken or invalid";
 
 fn notify(app: &AppHandle, body: &str) {
     let _ = app.notification().builder().title("Openmind").body(body).show();
@@ -117,7 +247,19 @@ fn quick_save(app: &AppHandle) {
 
         match response {
             Ok(resp) if resp.status().as_u16() == 201 => {
-                notify(&app, &format!("Saved — {}", truncate(&tab.title, 60)));
+                let title = if tab.title.trim().is_empty() { tab.url.clone() } else { tab.title.clone() };
+                notify(&app, &format!("Saved — {}", truncate(&title, 60)));
+
+                let item_id = resp
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|body| body.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()));
+
+                if let Some(item_id) = item_id {
+                    let _ = app.emit_to("panel", "save-confirmed", json!({ "itemId": item_id, "title": title }));
+                    show_panel(&app);
+                }
             }
             Ok(resp) => {
                 notify(&app, &format!("Save failed ({})", resp.status().as_u16()));
@@ -222,9 +364,10 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    if shortcut == &quick_save_shortcut() {
+                    let (active_save, active_find) = *app.state::<ShortcutsState>().lock().unwrap();
+                    if shortcut == &active_save {
                         quick_save(app);
-                    } else if shortcut == &toggle_panel_shortcut() {
+                    } else if shortcut == &active_find {
                         toggle_panel(app);
                     }
                 })
@@ -235,6 +378,8 @@ pub fn run() {
             settings::settings_set,
             settings::settings_clear,
             grab::grab_frontmost_tab,
+            get_shortcuts,
+            rebind_shortcuts,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -251,8 +396,10 @@ pub fn run() {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
 
-            register_shortcut_or_warn(app.handle(), quick_save_shortcut(), "⌘⇧S");
-            register_shortcut_or_warn(app.handle(), toggle_panel_shortcut(), "⌘⇧O");
+            let (quick_save, quick_find) = load_shortcuts(app.handle());
+            app.manage::<ShortcutsState>(Mutex::new((quick_save, quick_find)));
+            register_shortcut_or_warn(app.handle(), quick_save, "quick save");
+            register_shortcut_or_warn(app.handle(), quick_find, "quick find");
 
             build_tray(app)?;
 
@@ -262,4 +409,27 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_valid_pair() {
+        let (quick_save, quick_find) = parse_accelerator_pair("CmdOrCtrl+Shift+S", "F5");
+        assert_eq!(quick_save, Shortcut::new(Some(PRIMARY_MODIFIER | Modifiers::SHIFT), Code::KeyS));
+        assert_eq!(quick_find, Shortcut::new(None, Code::F5));
+    }
+
+    #[test]
+    fn invalid_field_falls_back_only_for_that_field() {
+        let (quick_save, quick_find) = parse_accelerator_pair("not a shortcut", "CmdOrCtrl+Shift+O");
+        assert_eq!(quick_save, quick_save_shortcut());
+        assert_eq!(quick_find, Shortcut::new(Some(PRIMARY_MODIFIER | Modifiers::SHIFT), Code::KeyO));
+
+        let (quick_save, quick_find) = parse_accelerator_pair("CmdOrCtrl+Shift+S", "also not a shortcut");
+        assert_eq!(quick_save, Shortcut::new(Some(PRIMARY_MODIFIER | Modifiers::SHIFT), Code::KeyS));
+        assert_eq!(quick_find, toggle_panel_shortcut());
+    }
 }
