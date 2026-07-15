@@ -497,6 +497,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeviceLinkCreated" }
+  /settings:
+    get:
+      operationId: getSettings
+      description: "The caller's account-level settings (e.g. the Kindle e-mail used for Send-to-Kindle)."
+      responses:
+        "200":
+          description: settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+    patch:
+      operationId: patchSettings
+      description: "Update account-level settings. Only provided fields are changed."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchSettingsRequest" }
+      responses:
+        "200":
+          description: updated settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+        "400": { description: invalid e-mail }
   /device-links/claim:
     post:
       operationId: claimDeviceLink
@@ -636,12 +661,15 @@ components:
         name: { type: string }
         rule: { $ref: "#/components/schemas/LensRule" }
         createdAt: { type: string, format: date-time }
+        digestSchedule: { type: string, description: "Cron-like digest schedule string; empty means digests are disabled for this Lens." }
+        lastDigestAt: { type: string, format: date-time, nullable: true, description: "When this Lens last sent a digest; null if it never has." }
     CreateLensRequest:
       type: object
       required: [name, rule]
       properties:
         name: { type: string, minLength: 1, maxLength: 120 }
         rule: { $ref: "#/components/schemas/LensRule" }
+        digestSchedule: { type: string, description: "Optional cron-like digest schedule; omit or empty to leave digests disabled." }
     Feed:
       type: object
       required: [id, url, title, siteUrl, lastStatus, createdAt]
@@ -704,6 +732,14 @@ components:
       properties:
         key: { type: string, description: "The full API key — shown exactly once." }
         name: { type: string }
+    Settings:
+      type: object
+      properties:
+        kindleEmail: { type: string, format: email, description: "Destination e-mail for Send-to-Kindle digests; absent if not configured." }
+    PatchSettingsRequest:
+      type: object
+      properties:
+        kindleEmail: { type: string, format: email }
     ImportResult:
       type: object
       description: "Summary of a bulk import."

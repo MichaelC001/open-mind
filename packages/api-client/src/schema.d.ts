@@ -432,6 +432,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's account-level settings (e.g. the Kindle e-mail used for Send-to-Kindle). */
+        get: operations["getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Update account-level settings. Only provided fields are changed. */
+        patch: operations["patchSettings"];
+        trace?: never;
+    };
     "/device-links/claim": {
         parameters: {
             query?: never;
@@ -559,10 +577,19 @@ export interface components {
             rule: components["schemas"]["LensRule"];
             /** Format: date-time */
             createdAt: string;
+            /** @description Cron-like digest schedule string; empty means digests are disabled for this Lens. */
+            digestSchedule?: string;
+            /**
+             * Format: date-time
+             * @description When this Lens last sent a digest; null if it never has.
+             */
+            lastDigestAt?: string | null;
         };
         CreateLensRequest: {
             name: string;
             rule: components["schemas"]["LensRule"];
+            /** @description Optional cron-like digest schedule; omit or empty to leave digests disabled. */
+            digestSchedule?: string;
         };
         Feed: {
             /** Format: uuid */
@@ -633,6 +660,17 @@ export interface components {
             /** @description The full API key — shown exactly once. */
             key: string;
             name: string;
+        };
+        Settings: {
+            /**
+             * Format: email
+             * @description Destination e-mail for Send-to-Kindle digests; absent if not configured.
+             */
+            kindleEmail?: string;
+        };
+        PatchSettingsRequest: {
+            /** Format: email */
+            kindleEmail?: string;
         };
         /** @description Summary of a bulk import. */
         ImportResult: {
@@ -1711,6 +1749,57 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DeviceLinkCreated"];
                 };
+            };
+        };
+    };
+    getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+        };
+    };
+    patchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+            /** @description invalid e-mail */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
