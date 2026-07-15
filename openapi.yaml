@@ -148,6 +148,45 @@ paths:
         "404": { description: not found }
         "409": { description: kindle is not configured }
         "422": { description: item has no body to send }
+  /items/{id}/highlights:
+    post:
+      operationId: createItemHighlight
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateHighlightRequest" }
+      responses:
+        "201":
+          description: Highlight created, with its mirrored quote card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateHighlightResponse" }
+        "400": { description: "Invalid request (empty exact, over caps)." }
+        "404": { description: unknown item }
+    get:
+      operationId: listItemHighlights
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Highlights anchored to this item, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Highlight" }
+        "404": { description: unknown item }
+  /highlights/{id}:
+    delete:
+      operationId: deleteHighlight
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Highlight and its quote card removed. }
+        "404": { description: unknown highlight }
   /assets:
     post:
       operationId: createAsset
@@ -509,6 +548,32 @@ components:
           required: [body]
           properties:
             body: { type: string }
+    Highlight:
+      type: object
+      required: [id, sourceItemId, quoteItemId, exact, prefix, suffix, offsetHint, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        sourceItemId: { type: string, format: uuid }
+        quoteItemId: { type: string, format: uuid }
+        exact: { type: string }
+        prefix: { type: string }
+        suffix: { type: string }
+        offsetHint: { type: integer }
+        createdAt: { type: string, format: date-time }
+    CreateHighlightRequest:
+      type: object
+      required: [exact]
+      properties:
+        exact: { type: string }
+        prefix: { type: string }
+        suffix: { type: string }
+        offsetHint: { type: integer }
+    CreateHighlightResponse:
+      type: object
+      required: [highlight, quoteItem]
+      properties:
+        highlight: { $ref: "#/components/schemas/Highlight" }
+        quoteItem: { $ref: "#/components/schemas/Item" }
     UpdateItemRequest:
       type: object
       description: "Fields to update on an item. Both userTags and pinned are optional; omit both for a no-op edit that is rejected as a bad request."

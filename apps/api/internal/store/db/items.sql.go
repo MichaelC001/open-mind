@@ -62,6 +62,41 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 	return i, err
 }
 
+const createQuoteItem = `-- name: CreateQuoteItem :one
+INSERT INTO items (user_id, body, card_type) VALUES ($1, $2, 'quote') RETURNING id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count
+`
+
+type CreateQuoteItemParams struct {
+	UserID uuid.UUID
+	Body   string
+}
+
+func (q *Queries) CreateQuoteItem(ctx context.Context, arg CreateQuoteItemParams) (Item, error) {
+	row := q.db.QueryRow(ctx, createQuoteItem, arg.UserID, arg.Body)
+	var i Item
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Url,
+		&i.Title,
+		&i.Body,
+		&i.LeadImageUrl,
+		&i.Summary,
+		&i.Tags,
+		&i.CardType,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Palette,
+		&i.UserTags,
+		&i.PinnedAt,
+		&i.LastDriftedAt,
+		&i.SearchTsv,
+		&i.PageCount,
+	)
+	return i, err
+}
+
 const deleteItem = `-- name: DeleteItem :execrows
 DELETE FROM items WHERE user_id = $1 AND id = $2
 `
