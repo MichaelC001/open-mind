@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { apiFetch } from "../../../../lib/api";
 
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const res = await apiFetch(`/lenses/${id}`, undefined, req);
+  return new NextResponse(await res.text(), {
+    status: res.status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await req.text();

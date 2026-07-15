@@ -2,6 +2,7 @@
 
 import { tokens } from "@openmind/ui";
 import { useState } from "react";
+import { relativeTime } from "../lib/relative-time";
 import type { Lens } from "../lib/types";
 
 const { color, font } = tokens;
@@ -17,21 +18,6 @@ function parseSchedule(schedule: string): { frequency: Frequency; weekday: numbe
     return { frequency: "weekly", weekday: Number.isNaN(weekday) ? 0 : weekday };
   }
   return { frequency: "off", weekday: 0 };
-}
-
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "recently";
-  const secs = Math.round((Date.now() - then) / 1000);
-  if (secs < 45) return "just now";
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.round(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.round(days / 30);
-  return months < 12 ? `${months}mo ago` : `${Math.round(months / 12)}y ago`;
 }
 
 const selectStyle = {
@@ -64,12 +50,19 @@ export function LensDigestControl({ lens }: { lens: Lens }) {
     setBusy(true);
     setError(null);
     try {
+      // UpdateLens is a full replace (name + rule + digestSchedule), so sending
+      // the page-load-time name/rule could clobber a concurrent rename or rule
+      // edit. Refetch the lens first and round-trip its current name/rule —
+      // this narrows the stale window to milliseconds.
+      const fresh = await fetch(`/api/lenses/${lens.id}`);
+      if (!fresh.ok) throw new Error("refetch failed");
+      const current = (await fresh.json()) as Lens;
       const res = await fetch(`/api/lenses/${lens.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          name: lens.name,
-          rule: lens.rule,
+          name: current.name,
+          rule: current.rule,
           digestSchedule: scheduleFor(nextFrequency, nextWeekday),
         }),
       });

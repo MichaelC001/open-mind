@@ -457,9 +457,12 @@ function KindleSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoadFailed(false);
     fetch("/api/settings")
       .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
       .then((data: Settings) => {
@@ -468,12 +471,12 @@ function KindleSection() {
         setValue(data.kindleEmail ?? "");
       })
       .catch(() => {
-        if (!cancelled) setSettings({});
+        if (!cancelled) setLoadFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadAttempt]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -514,7 +517,26 @@ function KindleSection() {
       >
         Items and Lens digests can be e-mailed to your Kindle as an EPUB.
       </p>
-      {settings === null ? null : (
+      {loadFailed && settings === null ? (
+        <button
+          type="button"
+          onClick={() => setLoadAttempt((n) => n + 1)}
+          style={{
+            display: "block",
+            margin: "6px 0 16px",
+            font: `500 11px/1 ${font.mono}`,
+            letterSpacing: ".02em",
+            color: color.terracotta,
+            background: color.noteSurface,
+            border: `1px solid ${color.terracotta}`,
+            borderRadius: 20,
+            padding: "6px 12px",
+            cursor: "pointer",
+          }}
+        >
+          Couldn&apos;t load settings — retry
+        </button>
+      ) : settings === null ? null : (
         <p style={{ fontFamily: font.mono, fontSize: 12, color: color.inkFaintAlt, margin: "6px 0 16px" }}>
           {configured ? `Current address: ${settings?.kindleEmail}` : "Not set"}
         </p>
