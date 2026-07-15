@@ -103,12 +103,14 @@ const kindleDigestCap = 25
 const kindleSettingKey = "kindle_email"
 
 // KindleDeps carries what the send_kindle worker needs to actually deliver a
-// message: a configured Mailer and the destination address. Configured
-// mirrors whether SMTP_HOST, SMTP_FROM and KINDLE_EMAIL were all set at
-// startup; handlers gate on it before ever enqueueing a job, so the worker
-// only sees Configured go false if the deploy's config changed between
-// enqueue and run — in that case Work returns an error so River retries
-// rather than silently dropping the send.
+// message: a configured Mailer and an optional fallback destination address.
+// Configured mirrors whether SMTP_HOST and SMTP_FROM (the SMTP transport)
+// were both set at startup — KINDLE_EMAIL is no longer required for
+// Configured to be true, since it is only ever the server-wide fallback
+// recipient (To), not the transport. Handlers gate on Configured before ever
+// enqueueing a job, so the worker only sees Configured go false if the
+// deploy's config changed between enqueue and run — in that case Work
+// returns an error so River retries rather than silently dropping the send.
 type KindleDeps struct {
 	Mailer     mailer.Mailer
 	To         string

@@ -21,11 +21,17 @@ import (
 // config is set.
 const kindleNotConfiguredMsg = "kindle is not configured — set your Kindle address in Settings, or set KINDLE_EMAIL on the server"
 
-// kindleConfiguredFor reports whether Send-to-Kindle can resolve a
-// destination address for uid: either the server has env config, or the
-// user has set their own kindle_email setting.
+// kindleConfiguredFor reports whether Send-to-Kindle can both send (SMTP
+// transport configured) and resolve a destination address for uid: the
+// server's KINDLE_EMAIL fallback, or the user's own kindle_email setting. A
+// user setting alone can never satisfy this — it only ever supplies a
+// recipient, and without a configured SMTP transport there is nothing to
+// send with.
 func (s *Server) kindleConfiguredFor(ctx context.Context, uid uuid.UUID) bool {
-	if s.kindleConfigured {
+	if !s.kindle.SMTPConfigured {
+		return false
+	}
+	if s.kindle.EnvRecipient {
 		return true
 	}
 	_, err := s.store.Queries.GetUserSetting(ctx, db.GetUserSettingParams{UserID: uid, Key: kindleSettingKey})
