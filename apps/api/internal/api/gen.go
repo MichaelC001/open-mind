@@ -154,7 +154,9 @@ type CreateItemRequest struct {
 
 // CreateLensRequest defines model for CreateLensRequest.
 type CreateLensRequest struct {
-	Name string `json:"name"`
+	// DigestSchedule Optional cron-like digest schedule; omit or empty to leave digests disabled.
+	DigestSchedule *string `json:"digestSchedule,omitempty"`
+	Name           string  `json:"name"`
 
 	// Rule A saved search rule. At least one of q, color, or types must be set. Applied like /search: q is text (FTS + vector), color ranks by palette proximity, types narrows by card type.
 	Rule LensRule `json:"rule"`
@@ -287,9 +289,15 @@ type ItemDetailStatus string
 
 // Lens defines model for Lens.
 type Lens struct {
-	CreatedAt time.Time          `json:"createdAt"`
-	Id        openapi_types.UUID `json:"id"`
-	Name      string             `json:"name"`
+	CreatedAt time.Time `json:"createdAt"`
+
+	// DigestSchedule Cron-like digest schedule string; empty means digests are disabled for this Lens.
+	DigestSchedule string             `json:"digestSchedule"`
+	Id             openapi_types.UUID `json:"id"`
+
+	// LastDigestAt When this Lens last sent a digest; null if it never has.
+	LastDigestAt *time.Time `json:"lastDigestAt"`
+	Name         string     `json:"name"`
 
 	// Rule A saved search rule. At least one of q, color, or types must be set. Applied like /search: q is text (FTS + vector), color ranks by palette proximity, types narrows by card type.
 	Rule LensRule `json:"rule"`
@@ -310,6 +318,11 @@ type LensRule struct {
 // LensRuleTypes defines model for LensRule.Types.
 type LensRuleTypes string
 
+// PatchSettingsRequest defines model for PatchSettingsRequest.
+type PatchSettingsRequest struct {
+	KindleEmail *openapi_types.Email `json:"kindleEmail,omitempty"`
+}
+
 // SearchResponse defines model for SearchResponse.
 type SearchResponse struct {
 	Results []SearchResult `json:"results"`
@@ -322,6 +335,12 @@ type SearchResponse struct {
 type SearchResult struct {
 	Item  Item    `json:"item"`
 	Score float32 `json:"score"`
+}
+
+// Settings defines model for Settings.
+type Settings struct {
+	// KindleEmail Destination e-mail for Send-to-Kindle digests; absent if not configured.
+	KindleEmail *openapi_types.Email `json:"kindleEmail,omitempty"`
 }
 
 // UnderstoodQuery How a natural-language query was interpreted (present only when parse=true). Reflects the values actually searched.
@@ -417,6 +436,9 @@ type CreateLensJSONRequestBody = CreateLensRequest
 
 // UpdateLensJSONRequestBody defines body for UpdateLens for application/json ContentType.
 type UpdateLensJSONRequestBody = CreateLensRequest
+
+// PatchSettingsJSONRequestBody defines body for PatchSettings for application/json ContentType.
+type PatchSettingsJSONRequestBody = PatchSettingsRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -528,6 +550,12 @@ type ServerInterface interface {
 
 	// (GET /search)
 	SearchItems(w http.ResponseWriter, r *http.Request, params SearchItemsParams)
+
+	// (GET /settings)
+	GetSettings(w http.ResponseWriter, r *http.Request)
+
+	// (PATCH /settings)
+	PatchSettings(w http.ResponseWriter, r *http.Request)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -716,6 +744,16 @@ func (_ Unimplemented) SendLensToKindle(w http.ResponseWriter, r *http.Request, 
 
 // (GET /search)
 func (_ Unimplemented) SearchItems(w http.ResponseWriter, r *http.Request, params SearchItemsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (GET /settings)
+func (_ Unimplemented) GetSettings(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (PATCH /settings)
+func (_ Unimplemented) PatchSettings(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1696,6 +1734,46 @@ func (siw *ServerInterfaceWrapper) SearchItems(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// GetSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetSettings(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PatchSettings operation middleware
+func (siw *ServerInterfaceWrapper) PatchSettings(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PatchSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1916,6 +1994,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/search", wrapper.SearchItems)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/settings", wrapper.GetSettings)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/settings", wrapper.PatchSettings)
 	})
 
 	return r

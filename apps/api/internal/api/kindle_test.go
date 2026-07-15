@@ -8,11 +8,24 @@ import (
 	"testing"
 
 	"github.com/rohithgilla12/openmind/api/internal/ai"
+	"github.com/rohithgilla12/openmind/api/internal/api"
 )
+
+// kindleFullyConfigured is SMTP transport + a server-wide fallback recipient
+// both set — the "everything env-configured" case.
+var kindleFullyConfigured = api.KindleConfig{SMTPConfigured: true, EnvRecipient: true}
+
+// kindleUnconfigured is neither SMTP nor a fallback recipient set.
+var kindleUnconfigured = api.KindleConfig{}
+
+// kindleSMTPOnlyConfigured is SMTP transport set but no server-wide
+// KINDLE_EMAIL fallback recipient — the shape a self-hoster gets when they
+// configure SMTP but let each reader set their own Kindle address.
+var kindleSMTPOnlyConfigured = api.KindleConfig{SMTPConfigured: true, EnvRecipient: false}
 
 // kindleErrorBody is the exact 409 payload the handlers must return when
 // Send-to-Kindle is unconfigured.
-const kindleUnconfiguredBody = "kindle is not configured — set SMTP_HOST, SMTP_FROM and KINDLE_EMAIL"
+const kindleUnconfiguredBody = "kindle is not configured — set your Kindle address in Settings, or set KINDLE_EMAIL on the server"
 
 func decodeError(t *testing.T, resp *http.Response) string {
 	t.Helper()
@@ -38,7 +51,7 @@ func decodeQueued(t *testing.T, resp *http.Response) bool {
 
 func TestKindleItemUnconfiguredReturns409(t *testing.T) {
 	s, rc, _ := testDeps(t)
-	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), false))
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleUnconfigured))
 	t.Cleanup(srv.Close)
 
 	id := createNoteItem(t, srv.URL, "send me")
@@ -58,7 +71,7 @@ func TestKindleItemUnconfiguredReturns409(t *testing.T) {
 // whether Send-to-Kindle is configured.
 func TestKindleItemUnknownEvenUnconfiguredNotFound(t *testing.T) {
 	s, rc, _ := testDeps(t)
-	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), false))
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleUnconfigured))
 	t.Cleanup(srv.Close)
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/items/11111111-1111-1111-1111-111111111111/kindle", "")
@@ -70,7 +83,7 @@ func TestKindleItemUnknownEvenUnconfiguredNotFound(t *testing.T) {
 
 func TestKindleItemUnknownNotFound(t *testing.T) {
 	s, rc, _ := testDeps(t)
-	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), true))
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleFullyConfigured))
 	t.Cleanup(srv.Close)
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/items/11111111-1111-1111-1111-111111111111/kindle", "")
@@ -82,7 +95,7 @@ func TestKindleItemUnknownNotFound(t *testing.T) {
 
 func TestKindleItemEmptyBodyReturns422(t *testing.T) {
 	s, rc, _ := testDeps(t)
-	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), true))
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleFullyConfigured))
 	t.Cleanup(srv.Close)
 
 	resp := postJSON(t, srv.URL+"/items", `{"url":"https://example.com/no-body-yet"}`)
@@ -102,7 +115,7 @@ func TestKindleItemEmptyBodyReturns422(t *testing.T) {
 
 func TestKindleItemHappyPathQueuesJob(t *testing.T) {
 	s, rc, pool := testDeps(t)
-	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), true))
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleFullyConfigured))
 	t.Cleanup(srv.Close)
 
 	id := createNoteItem(t, srv.URL, "send this note")
@@ -126,9 +139,97 @@ func TestKindleItemHappyPathQueuesJob(t *testing.T) {
 	}
 }
 
+// TestKindleItemUserSettingConfiguresRecipient asserts a user's own
+// kindle_email setting satisfies the configured gate when SMTP transport is
+// configured but the server has no KINDLE_EMAIL fallback recipient: the
+// recipient chain resolves per-user first. (Config matrix case a.)
+func TestKindleItemUserSettingConfiguresRecipient(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleSMTPOnlyConfigured))
+	t.Cleanup(srv.Close)
+
+	patch := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"kindleEmail":"me@kindle.com"}`)
+	patch.Body.Close()
+
+	id := createNoteItem(t, srv.URL, "send me")
+
+	resp := doJSON(t, http.MethodPost, srv.URL+"/items/"+id+"/kindle", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+}
+
+// TestKindleItemSMTPOnlyNoSettingReturns409 asserts that SMTP being
+// configured is not enough on its own: without either a server-wide
+// KINDLE_EMAIL fallback or a per-user kindle_email setting, there is still
+// nowhere to send to. (Config matrix case b.)
+func TestKindleItemSMTPOnlyNoSettingReturns409(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleSMTPOnlyConfigured))
+	t.Cleanup(srv.Close)
+
+	id := createNoteItem(t, srv.URL, "send me")
+
+	resp := doJSON(t, http.MethodPost, srv.URL+"/items/"+id+"/kindle", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if got := decodeError(t, resp); got != kindleUnconfiguredBody {
+		t.Errorf("error = %q, want %q", got, kindleUnconfiguredBody)
+	}
+}
+
+// TestKindleItemUserSettingWithoutSMTPReturns409 is the regression test for
+// the config-gate bug: a per-user kindle_email setting supplies only a
+// recipient, never an SMTP transport. With no SMTP configured at all, the
+// gate must still 409 even though the user has set their address — enqueuing
+// here would hand the worker a nil Mailer that burns its retries. (Config
+// matrix case c, "the bug".)
+func TestKindleItemUserSettingWithoutSMTPReturns409(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleUnconfigured))
+	t.Cleanup(srv.Close)
+
+	patch := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"kindleEmail":"me@kindle.com"}`)
+	patch.Body.Close()
+
+	id := createNoteItem(t, srv.URL, "send me")
+
+	resp := doJSON(t, http.MethodPost, srv.URL+"/items/"+id+"/kindle", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if got := decodeError(t, resp); got != kindleUnconfiguredBody {
+		t.Errorf("error = %q, want %q", got, kindleUnconfiguredBody)
+	}
+}
+
+// TestKindleItemNoSettingNoEnvReturns409ExactMessage confirms the 409 message
+// mentions both the Settings UI and the server env var, since either path can
+// configure it.
+func TestKindleItemNoSettingNoEnvReturns409ExactMessage(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleUnconfigured))
+	t.Cleanup(srv.Close)
+
+	id := createNoteItem(t, srv.URL, "send me")
+
+	resp := doJSON(t, http.MethodPost, srv.URL+"/items/"+id+"/kindle", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if got := decodeError(t, resp); got != kindleUnconfiguredBody {
+		t.Errorf("error = %q, want %q", got, kindleUnconfiguredBody)
+	}
+}
+
 func TestKindleLensUnconfiguredReturns409(t *testing.T) {
 	s, rc, _ := testDeps(t)
-	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), false))
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleUnconfigured))
 	t.Cleanup(srv.Close)
 
 	lensResp := postJSON(t, srv.URL+"/lenses", `{"name":"Everything","rule":{"types":["note"]}}`)
@@ -152,7 +253,7 @@ func TestKindleLensUnconfiguredReturns409(t *testing.T) {
 
 func TestKindleLensUnknownNotFound(t *testing.T) {
 	s, rc, _ := testDeps(t)
-	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), true))
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleFullyConfigured))
 	t.Cleanup(srv.Close)
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/lenses/11111111-1111-1111-1111-111111111111/kindle", "")
@@ -164,7 +265,7 @@ func TestKindleLensUnknownNotFound(t *testing.T) {
 
 func TestKindleLensNoMatchesReturns422(t *testing.T) {
 	s, rc, _ := testDeps(t)
-	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), true))
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleFullyConfigured))
 	t.Cleanup(srv.Close)
 
 	// A rule that matches nothing at all.
@@ -186,7 +287,7 @@ func TestKindleLensNoMatchesReturns422(t *testing.T) {
 
 func TestKindleLensHappyPathQueuesJob(t *testing.T) {
 	s, rc, pool := testDeps(t)
-	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), true))
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), kindleFullyConfigured))
 	t.Cleanup(srv.Close)
 
 	// A note item has body set at creation, but card_type only becomes

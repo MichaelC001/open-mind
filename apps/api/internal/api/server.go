@@ -38,25 +38,37 @@ const (
 // Server implements the generated ServerInterface backed by the store and an
 // insert-only River client. Capture is sacred: CreateItem returns as soon as
 // the row is persisted; enrichment is queued and runs asynchronously.
+// KindleConfig carries the two independent facts the kindle handlers gate
+// on: whether the server's SMTP transport is usable at all, and whether it
+// also has a server-wide fallback recipient (KINDLE_EMAIL). A user's own
+// kindle_email setting can only ever supply a recipient — it can never
+// substitute for a missing SMTP transport.
+type KindleConfig struct {
+	SMTPConfigured bool
+	EnvRecipient   bool
+}
+
 type Server struct {
-	store            *store.Store
-	riverClient      *river.Client[pgx.Tx]
-	provider         ai.Provider
-	assetStore       *assets.FSStore
-	assetMaxByte     int64
-	feeds            *feeds.Service
-	kindleConfigured bool
+	store        *store.Store
+	riverClient  *river.Client[pgx.Tx]
+	provider     ai.Provider
+	assetStore   *assets.FSStore
+	assetMaxByte int64
+	feeds        *feeds.Service
+	kindle       KindleConfig
 }
 
 // NewServer wires the HTTP handler: per-IP rate limiting, credential
 // resolution, and generated routing. In token mode with an empty
 // LegacyToken, auth is disabled (single-user self-host) — the caller is
 // warned at startup. assetStore backs the image upload/serve endpoints and
-// maxBytes caps upload size. kindleConfigured mirrors whether
-// Send-to-Kindle's SMTP + destination env vars were set at startup; the
-// kindle handlers 409 when it is false.
-func NewServer(s *store.Store, riverClient *river.Client[pgx.Tx], provider ai.Provider, authCfg AuthConfig, assetStore *assets.FSStore, maxBytes int64, feedSvc *feeds.Service, kindleConfigured bool) http.Handler {
-	srv := &Server{store: s, riverClient: riverClient, provider: provider, assetStore: assetStore, assetMaxByte: maxBytes, feeds: feedSvc, kindleConfigured: kindleConfigured}
+// maxBytes caps upload size. kindleCfg carries whether Send-to-Kindle's SMTP
+// transport (SMTP_HOST + SMTP_FROM) is configured, and whether the server
+// also has a KINDLE_EMAIL fallback recipient; the kindle handlers 409 when
+// SMTP isn't configured, or when it is but neither a fallback recipient nor
+// a per-user kindle_email setting is available.
+func NewServer(s *store.Store, riverClient *river.Client[pgx.Tx], provider ai.Provider, authCfg AuthConfig, assetStore *assets.FSStore, maxBytes int64, feedSvc *feeds.Service, kindleCfg KindleConfig) http.Handler {
+	srv := &Server{store: s, riverClient: riverClient, provider: provider, assetStore: assetStore, assetMaxByte: maxBytes, feeds: feedSvc, kindle: kindleCfg}
 	r := chi.NewRouter()
 	// Rate limiting runs before credential resolution so failed guesses consume
 	// limiter tokens by construction — brute-force attempts are throttled to

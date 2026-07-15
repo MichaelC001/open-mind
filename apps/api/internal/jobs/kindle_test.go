@@ -38,7 +38,7 @@ func newKindleTestStore(t *testing.T) *store.Store {
 	if err := store.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE items, item_embeddings, lenses CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE items, item_embeddings, lenses, user_settings CASCADE`); err != nil {
 		t.Fatalf("truncating: %v", err)
 	}
 	s := store.New(pool)
@@ -198,5 +198,100 @@ func TestKindleWorkerLensDigestCapsAndSkipsBodyless(t *testing.T) {
 	}
 	if chapters != 25 {
 		t.Errorf("chapters = %d, want 25 (capped, bodyless items excluded)", chapters)
+	}
+}
+
+// TestKindleWorkerItemIDsModeBuildsFromExactlyThoseItems asserts that when
+// ItemIDs is set, the digest is built from exactly that set — not from
+// re-running the lens's rule — and that a body-less item among them is
+// skipped just like the rule-derived path.
+func TestKindleWorkerItemIDsModeBuildsFromExactlyThoseItems(t *testing.T) {
+	s := newKindleTestStore(t)
+	ctx := context.Background()
+
+	included := newItem(t, s, "included", "included body", "note")
+	bodyless := newItem(t, s, "bodyless", "", "note")
+	// excluded matches the lens's rule but is not in ItemIDs, so it must not
+	// appear in the digest.
+	newItem(t, s, "excluded", "excluded body", "note")
+
+	lens, err := s.Queries.CreateLens(ctx, db.CreateLensParams{UserID: kindleTestUser, Name: "Some notes", Rule: []byte(`{"types":["note"]}`)})
+	if err != nil {
+		t.Fatalf("create lens: %v", err)
+	}
+
+	fm := &fakeMailer{}
+	w := &jobs.SendKindleWorker{Store: s, Provider: ai.NewNoop(), Deps: jobs.KindleDeps{Mailer: fm, To: "reader@kindle.com", Configured: true}}
+	lensID := lens.ID
+	args := jobs.SendKindleArgs{UserID: kindleTestUser, LensID: &lensID, ItemIDs: []uuid.UUID{included.ID, bodyless.ID}}
+	if err := w.Work(ctx, &river.Job[jobs.SendKindleArgs]{Args: args}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if len(fm.sent) != 1 {
+		t.Fatalf("sent = %d messages, want 1", len(fm.sent))
+	}
+
+	zr, err := zip.NewReader(bytes.NewReader(fm.sent[0].Attachment.Data), int64(len(fm.sent[0].Attachment.Data)))
+	if err != nil {
+		t.Fatalf("opening epub as zip: %v", err)
+	}
+	chapters := 0
+	for _, f := range zr.File {
+		if strings.HasPrefix(f.Name, "OEBPS/chapter-") {
+			chapters++
+		}
+	}
+	if chapters != 1 {
+		t.Errorf("chapters = %d, want 1 (only the included, bodied item)", chapters)
+	}
+}
+
+// TestKindleWorkerRecipientFallsBackToDepsTo asserts recipient resolution:
+// the user's kindle_email setting wins when present, and Deps.To is used
+// only as a fallback when it is not.
+func TestKindleWorkerRecipientFallsBackToDepsTo(t *testing.T) {
+	s := newKindleTestStore(t)
+	item := newItem(t, s, "Title", "body", "article")
+
+	fm := &fakeMailer{}
+	w := &jobs.SendKindleWorker{Store: s, Provider: ai.NewNoop(), Deps: jobs.KindleDeps{Mailer: fm, To: "fallback@kindle.com", Configured: true}}
+	id := item.ID
+	if err := w.Work(context.Background(), &river.Job[jobs.SendKindleArgs]{Args: jobs.SendKindleArgs{UserID: kindleTestUser, ItemID: &id}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if len(fm.sent) != 1 || fm.sent[0].To != "fallback@kindle.com" {
+		t.Fatalf("sent = %+v, want one message to the Deps.To fallback", fm.sent)
+	}
+
+	if err := s.Queries.UpsertUserSetting(context.Background(), db.UpsertUserSettingParams{
+		UserID: kindleTestUser, Key: "kindle_email", Value: "personal@kindle.com",
+	}); err != nil {
+		t.Fatalf("upsert setting: %v", err)
+	}
+	if err := w.Work(context.Background(), &river.Job[jobs.SendKindleArgs]{Args: jobs.SendKindleArgs{UserID: kindleTestUser, ItemID: &id}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if len(fm.sent) != 2 || fm.sent[1].To != "personal@kindle.com" {
+		t.Fatalf("sent[1] = %+v, want a message to the user's kindle_email setting", fm.sent)
+	}
+}
+
+// TestKindleWorkerRecipientErrorsWithNeitherSettingNorFallback asserts that
+// when neither the user's kindle_email setting nor Deps.To is configured,
+// Work returns an error so River retries rather than silently dropping the
+// send.
+func TestKindleWorkerRecipientErrorsWithNeitherSettingNorFallback(t *testing.T) {
+	s := newKindleTestStore(t)
+	item := newItem(t, s, "Title", "body", "article")
+
+	fm := &fakeMailer{}
+	w := &jobs.SendKindleWorker{Store: s, Provider: ai.NewNoop(), Deps: jobs.KindleDeps{Mailer: fm, To: "", Configured: true}}
+	id := item.ID
+	err := w.Work(context.Background(), &river.Job[jobs.SendKindleArgs]{Args: jobs.SendKindleArgs{UserID: kindleTestUser, ItemID: &id}})
+	if err == nil {
+		t.Fatal("Work = nil error, want an error when neither kindle_email nor Deps.To is set")
+	}
+	if len(fm.sent) != 0 {
+		t.Errorf("sent = %d messages, want 0", len(fm.sent))
 	}
 }

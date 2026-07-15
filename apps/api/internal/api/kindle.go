@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 	"github.com/riverqueue/river"
@@ -15,8 +17,36 @@ import (
 )
 
 // kindleNotConfiguredMsg is returned verbatim as the 409 body's "error"
-// field, so operators get the exact env vars to set.
-const kindleNotConfiguredMsg = "kindle is not configured — set SMTP_HOST, SMTP_FROM and KINDLE_EMAIL"
+// field when neither a per-user Kindle address nor the server-wide env
+// config is set.
+const kindleNotConfiguredMsg = "kindle is not configured — set your Kindle address in Settings, or set KINDLE_EMAIL on the server"
+
+// kindleConfiguredFor reports whether Send-to-Kindle can both send (SMTP
+// transport configured) and resolve a destination address for uid: the
+// server's KINDLE_EMAIL fallback, or the user's own kindle_email setting. A
+// user setting alone can never satisfy this — it only ever supplies a
+// recipient, and without a configured SMTP transport there is nothing to
+// send with.
+//
+// A non-nil error means the configuration check itself failed (e.g. a DB
+// error unrelated to "no such setting") — callers must surface that as a
+// 500, not silently treat it as "not configured".
+func (s *Server) kindleConfiguredFor(ctx context.Context, uid uuid.UUID) (bool, error) {
+	if !s.kindle.SMTPConfigured {
+		return false, nil
+	}
+	if s.kindle.EnvRecipient {
+		return true, nil
+	}
+	_, err := s.store.Queries.GetUserSetting(ctx, db.GetUserSettingParams{UserID: uid, Key: kindleSettingKey})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
 
 // kindleMaxAttempts caps River retries for a send_kindle job: SMTP failures
 // are usually transient, but a job should eventually give up rather than
@@ -40,7 +70,13 @@ func (s *Server) SendItemToKindle(w http.ResponseWriter, r *http.Request, id ope
 		writeError(w, http.StatusInternalServerError, "could not fetch item")
 		return
 	}
-	if !s.kindleConfigured {
+	configured, err := s.kindleConfiguredFor(ctx, uid)
+	if err != nil {
+		slog.Error("checking kindle configuration", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not check kindle configuration")
+		return
+	}
+	if !configured {
 		writeError(w, http.StatusConflict, kindleNotConfiguredMsg)
 		return
 	}
@@ -76,7 +112,13 @@ func (s *Server) SendLensToKindle(w http.ResponseWriter, r *http.Request, id ope
 		writeError(w, http.StatusInternalServerError, "could not fetch lens")
 		return
 	}
-	if !s.kindleConfigured {
+	configured, err := s.kindleConfiguredFor(ctx, uid)
+	if err != nil {
+		slog.Error("checking kindle configuration", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not check kindle configuration")
+		return
+	}
+	if !configured {
 		writeError(w, http.StatusConflict, kindleNotConfiguredMsg)
 		return
 	}

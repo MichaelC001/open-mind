@@ -13,10 +13,16 @@ import (
 )
 
 // Chapter is a single chapter of an EPUB document. Body is plain text;
-// paragraphs are split on blank lines and HTML-escaped on render.
+// paragraphs are split on blank lines and HTML-escaped on render. Image, if
+// set, is the raw bytes of a lead/hero image embedded at the top of the
+// chapter; ImageType must be one of image/jpeg, image/png, image/gif, or
+// image/webp — anything else (including an empty ImageType with non-empty
+// Image) causes the image to be silently dropped.
 type Chapter struct {
-	Title string
-	Body  string
+	Title     string
+	Body      string
+	Image     []byte
+	ImageType string
 }
 
 // Document describes the book to build.
@@ -24,6 +30,27 @@ type Document struct {
 	Title    string
 	Author   string
 	Chapters []Chapter
+	// Date is a human-readable date line shown on the cover page. Callers
+	// set it (e.g. from time.Now() in the worker) — Build itself never calls
+	// time.Now(), so builds of identical input remain byte-identical. Left
+	// empty, the date line is omitted from the cover page.
+	Date string
+}
+
+// imageExt maps an allowed ImageType to its manifest file extension. Types
+// not present here are dropped by imageFor.
+var imageExt = map[string]string{
+	"image/jpeg": "jpg",
+	"image/png":  "png",
+	"image/gif":  "gif",
+	"image/webp": "webp",
+}
+
+// imageFileName returns the deterministic file name for the index'th
+// chapter's embedded image (1-based, zero-padded to 2 digits), e.g.
+// "image01.png".
+func imageFileName(index int, ext string) string {
+	return fmt.Sprintf("image%02d.%s", index+1, ext)
 }
 
 // xmlProlog is written as raw bytes directly to each zip entry, ahead of the
@@ -48,7 +75,21 @@ var chapterTemplate = template.Must(template.New("chapter").Parse(`<html xmlns="
 </head>
 <body>
   <h1>{{.Title}}</h1>
-{{range .Paragraphs}}  <p>{{.}}</p>
+{{if .ImageFile}}  <img src="{{.ImageFile}}" alt=""/>
+{{end}}{{range .Paragraphs}}  <p>{{.}}</p>
+{{end}}</body>
+</html>
+`))
+
+var coverTemplate = template.Must(template.New("cover").Parse(`<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="en">
+<head>
+  <title>{{.Title}}</title>
+  <meta charset="UTF-8"/>
+</head>
+<body>
+  <h1>{{.Title}}</h1>
+  <p>{{.ChapterCount}} items</p>
+{{if .Date}}  <p>{{.Date}}</p>
 {{end}}</body>
 </html>
 `))
@@ -78,18 +119,25 @@ var opfTemplate = template.Must(template.New("opf").Parse(`<package xmlns="http:
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
 {{range .Chapters}}    <item id="{{.ID}}" href="{{.File}}" media-type="application/xhtml+xml"/>
-{{end}}  </manifest>
+{{if .ImageFile}}    <item id="{{.ImageID}}" href="{{.ImageFile}}" media-type="{{.ImageMediaType}}"{{if .IsCoverImage}} properties="cover-image"{{end}}/>
+{{end}}{{end}}  </manifest>
   <spine>
+    <itemref idref="cover"/>
 {{range .Chapters}}    <itemref idref="{{.ID}}"/>
 {{end}}  </spine>
 </package>
 `))
 
 type chapterView struct {
-	ID    string
-	File  string
-	Title string
+	ID             string
+	File           string
+	Title          string
+	ImageID        string
+	ImageFile      string
+	ImageMediaType string
+	IsCoverImage   bool
 }
 
 type opfView struct {
@@ -97,6 +145,12 @@ type opfView struct {
 	Title    string
 	Author   string
 	Chapters []chapterView
+}
+
+type coverView struct {
+	Title        string
+	ChapterCount int
+	Date         string
 }
 
 func chapterFileName(index int) string {
@@ -154,13 +208,24 @@ func Build(w io.Writer, doc Document) error {
 		return fmt.Errorf("writing container.xml: %w", err)
 	}
 
+	coverImageAssigned := false
 	chapterViews := make([]chapterView, len(doc.Chapters))
 	for i, c := range doc.Chapters {
-		chapterViews[i] = chapterView{
+		cv := chapterView{
 			ID:    chapterID(i),
 			File:  chapterFileName(i),
 			Title: c.Title,
 		}
+		if ext, ok := imageExt[c.ImageType]; ok && len(c.Image) > 0 {
+			cv.ImageID = fmt.Sprintf("image-%d", i+1)
+			cv.ImageFile = imageFileName(i, ext)
+			cv.ImageMediaType = c.ImageType
+			if !coverImageAssigned {
+				cv.IsCoverImage = true
+				coverImageAssigned = true
+			}
+		}
+		chapterViews[i] = cv
 	}
 
 	opf := opfView{
@@ -187,21 +252,43 @@ func Build(w io.Writer, doc Document) error {
 		return fmt.Errorf("writing nav.xhtml: %w", err)
 	}
 
+	var coverBuf strings.Builder
+	coverBuf.WriteString(xmlProlog)
+	cover := coverView{
+		Title:        doc.Title,
+		ChapterCount: len(doc.Chapters),
+		Date:         doc.Date,
+	}
+	if err := coverTemplate.Execute(&coverBuf, cover); err != nil {
+		return fmt.Errorf("rendering cover.xhtml: %w", err)
+	}
+	if err := writeDeflated(zw, "OEBPS/cover.xhtml", []byte(coverBuf.String())); err != nil {
+		return fmt.Errorf("writing cover.xhtml: %w", err)
+	}
+
 	for i, c := range doc.Chapters {
+		cv := chapterViews[i]
 		var chBuf strings.Builder
 		chBuf.WriteString(xmlProlog)
 		data := struct {
 			Title      string
 			Paragraphs []string
+			ImageFile  string
 		}{
 			Title:      c.Title,
 			Paragraphs: paragraphs(c.Body),
+			ImageFile:  cv.ImageFile,
 		}
 		if err := chapterTemplate.Execute(&chBuf, data); err != nil {
 			return fmt.Errorf("rendering %s: %w", chapterFileName(i), err)
 		}
 		if err := writeDeflated(zw, "OEBPS/"+chapterFileName(i), []byte(chBuf.String())); err != nil {
 			return fmt.Errorf("writing %s: %w", chapterFileName(i), err)
+		}
+		if cv.ImageFile != "" {
+			if err := writeDeflated(zw, "OEBPS/"+cv.ImageFile, c.Image); err != nil {
+				return fmt.Errorf("writing %s: %w", cv.ImageFile, err)
+			}
 		}
 	}
 

@@ -322,7 +322,7 @@ See [Multi-user mode (Clerk)](#multi-user-mode-clerk) above for real multi-user 
 
 ## Send to Kindle
 
-Any item, or a Lens's current matches as a digest, can be e-mailed to your Kindle as an EPUB: `POST /items/{id}/kindle` (proxied at `/api/items/{id}/kindle`) or `POST /lenses/{id}/kindle` (proxied at `/api/lenses/{id}/kindle`). Both are queued asynchronously — the request returns `202 {"queued":true}` immediately, and delivery happens in the background via a River job. A Lens digest is capped at the 25 most recent matching items with a body, one EPUB chapter per item.
+Any item, or a Lens's current matches as a digest, can be e-mailed to your Kindle as an EPUB: `POST /items/{id}/kindle` (proxied at `/api/items/{id}/kindle`) or `POST /lenses/{id}/kindle` (proxied at `/api/lenses/{id}/kindle`). Both are queued asynchronously — the request returns `202 {"queued":true}` immediately, and delivery happens in the background via a River job. A Lens digest is capped at 25 matching items with a body, one EPUB chapter per item.
 
 The feature is off until you configure outbound SMTP:
 
@@ -333,9 +333,9 @@ The feature is off until you configure outbound SMTP:
 | `SMTP_FROM` | yes | Sender address — must be approved in your Amazon account (see below). |
 | `SMTP_USERNAME` | no | SMTP auth username, if your server requires it. |
 | `SMTP_PASSWORD` | no | SMTP auth password, if your server requires it. Never commit this to source control or an `.env` checked into git. |
-| `KINDLE_EMAIL` | yes | Your `@kindle.com` delivery address. |
+| `KINDLE_EMAIL` | no | Instance-wide fallback `@kindle.com` delivery address. Each user can instead set their own address on the **Settings** page (Devices & Keys → Send to Kindle) — the per-user address always wins. |
 
-Send-to-Kindle is enabled only when `SMTP_HOST`, `SMTP_FROM`, and `KINDLE_EMAIL` are all set. Without them, both endpoints return `409` with a message naming the missing variables; `docker-compose.yml` passes all six through from the host environment (empty by default). Restart the `api` service after changing them.
+The SMTP transport (`SMTP_HOST` + `SMTP_FROM`) must be configured, and a recipient must exist — either the user's own Kindle address (set in the web app's Settings) or the `KINDLE_EMAIL` fallback. Otherwise both endpoints return `409`; `docker-compose.yml` passes all six variables through from the host environment (empty by default). Restart the `api` service after changing them.
 
 ### Amazon setup
 
@@ -347,4 +347,8 @@ Send-to-Kindle is enabled only when `SMTP_HOST`, `SMTP_FROM`, and `KINDLE_EMAIL`
 
 - Delivery is fire-and-forget from the API's perspective: a `202` means the job was queued, not that Amazon accepted the e-mail. Check your Kindle library (or the `api` service logs) if a send doesn't arrive.
 - A transient SMTP failure is retried by River (up to 5 attempts) rather than dropped. Because retries resend the same EPUB, a retried job can occasionally deliver a duplicate — rare (only on error) and harmless.
-- Kindle delivery uses one shared `KINDLE_EMAIL` for the whole instance; per-user Kindle addresses are planned once auth ships (see `TODO.md`).
+- EPUBs open with a cover page and, where an item has a lead image, a hero image at the top of its chapter (fetched at build time; a missing or oversized image simply renders without one).
+
+### Scheduled Lens digests
+
+Any Lens can be sent on a schedule: pick **Daily** or **Weekly** (plus a weekday) in the Lens header. A scheduled digest contains only items that are **new since the last digest** (with an hour's grace for late-finishing enrichment) — nothing new means no e-mail. Scans run hourly from when the worker starts (times are UTC for weekly-day matching; per-user timezones aren't supported yet). The Lens header shows when the digest last went out.

@@ -12,7 +12,7 @@ import (
 )
 
 const createLens = `-- name: CreateLens :one
-INSERT INTO lenses (user_id, name, rule) VALUES ($1, $2, $3) RETURNING id, user_id, name, rule, created_at, updated_at
+INSERT INTO lenses (user_id, name, rule) VALUES ($1, $2, $3) RETURNING id, user_id, name, rule, created_at, updated_at, digest_schedule, last_digest_at
 `
 
 type CreateLensParams struct {
@@ -31,6 +31,8 @@ func (q *Queries) CreateLens(ctx context.Context, arg CreateLensParams) (Lense, 
 		&i.Rule,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DigestSchedule,
+		&i.LastDigestAt,
 	)
 	return i, err
 }
@@ -53,7 +55,7 @@ func (q *Queries) DeleteLens(ctx context.Context, arg DeleteLensParams) (int64, 
 }
 
 const getLens = `-- name: GetLens :one
-SELECT id, user_id, name, rule, created_at, updated_at FROM lenses WHERE user_id = $1 AND id = $2
+SELECT id, user_id, name, rule, created_at, updated_at, digest_schedule, last_digest_at FROM lenses WHERE user_id = $1 AND id = $2
 `
 
 type GetLensParams struct {
@@ -71,12 +73,49 @@ func (q *Queries) GetLens(ctx context.Context, arg GetLensParams) (Lense, error)
 		&i.Rule,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DigestSchedule,
+		&i.LastDigestAt,
 	)
 	return i, err
 }
 
+const listDueDigestLenses = `-- name: ListDueDigestLenses :many
+SELECT id, user_id, name, rule, created_at, updated_at, digest_schedule, last_digest_at FROM lenses WHERE digest_schedule <> ''
+`
+
+// Cross-user by design: the digest scanner runs system-wide, like the feed
+// poller. Due-ness is refined in Go; SQL just prefilters scheduled lenses.
+func (q *Queries) ListDueDigestLenses(ctx context.Context) ([]Lense, error) {
+	rows, err := q.db.Query(ctx, listDueDigestLenses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Lense
+	for rows.Next() {
+		var i Lense
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Name,
+			&i.Rule,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DigestSchedule,
+			&i.LastDigestAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLenses = `-- name: ListLenses :many
-SELECT id, user_id, name, rule, created_at, updated_at FROM lenses WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, name, rule, created_at, updated_at, digest_schedule, last_digest_at FROM lenses WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListLenses(ctx context.Context, userID uuid.UUID) ([]Lense, error) {
@@ -95,6 +134,8 @@ func (q *Queries) ListLenses(ctx context.Context, userID uuid.UUID) ([]Lense, er
 			&i.Rule,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DigestSchedule,
+			&i.LastDigestAt,
 		); err != nil {
 			return nil, err
 		}
@@ -106,9 +147,26 @@ func (q *Queries) ListLenses(ctx context.Context, userID uuid.UUID) ([]Lense, er
 	return items, nil
 }
 
+const stampLensDigest = `-- name: StampLensDigest :execrows
+UPDATE lenses SET last_digest_at = now() WHERE user_id = $1 AND id = $2
+`
+
+type StampLensDigestParams struct {
+	UserID uuid.UUID
+	ID     uuid.UUID
+}
+
+func (q *Queries) StampLensDigest(ctx context.Context, arg StampLensDigestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, stampLensDigest, arg.UserID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateLens = `-- name: UpdateLens :one
 UPDATE lenses SET name = $3, rule = $4, updated_at = now()
-WHERE user_id = $1 AND id = $2 RETURNING id, user_id, name, rule, created_at, updated_at
+WHERE user_id = $1 AND id = $2 RETURNING id, user_id, name, rule, created_at, updated_at, digest_schedule, last_digest_at
 `
 
 type UpdateLensParams struct {
@@ -133,6 +191,35 @@ func (q *Queries) UpdateLens(ctx context.Context, arg UpdateLensParams) (Lense, 
 		&i.Rule,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DigestSchedule,
+		&i.LastDigestAt,
+	)
+	return i, err
+}
+
+const updateLensDigestSchedule = `-- name: UpdateLensDigestSchedule :one
+UPDATE lenses SET digest_schedule = $3, updated_at = now()
+WHERE user_id = $1 AND id = $2 RETURNING id, user_id, name, rule, created_at, updated_at, digest_schedule, last_digest_at
+`
+
+type UpdateLensDigestScheduleParams struct {
+	UserID         uuid.UUID
+	ID             uuid.UUID
+	DigestSchedule string
+}
+
+func (q *Queries) UpdateLensDigestSchedule(ctx context.Context, arg UpdateLensDigestScheduleParams) (Lense, error) {
+	row := q.db.QueryRow(ctx, updateLensDigestSchedule, arg.UserID, arg.ID, arg.DigestSchedule)
+	var i Lense
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.Rule,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DigestSchedule,
+		&i.LastDigestAt,
 	)
 	return i, err
 }

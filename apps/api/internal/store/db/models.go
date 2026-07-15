@@ -94,12 +94,14 @@ type ItemEmbedding struct {
 }
 
 type Lense struct {
-	ID        uuid.UUID
-	UserID    uuid.UUID
-	Name      string
-	Rule      []byte
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID             uuid.UUID
+	UserID         uuid.UUID
+	Name           string
+	Rule           []byte
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	DigestSchedule string
+	LastDigestAt   pgtype.Timestamptz
 }
 
 type Link struct {
@@ -114,4 +116,11 @@ type User struct {
 	CreatedAt   pgtype.Timestamptz
 	ClerkUserID pgtype.Text
 	Email       string
+}
+
+type UserSetting struct {
+	UserID    uuid.UUID
+	Key       string
+	Value     string
+	UpdatedAt pgtype.Timestamptz
 }

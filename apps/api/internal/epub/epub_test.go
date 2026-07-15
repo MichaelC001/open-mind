@@ -190,6 +190,123 @@ func TestBuild_EmptyChaptersProducesValidEPUB(t *testing.T) {
 	}
 }
 
+// onePxPNG is a valid 1x1 transparent PNG, used to test image embedding.
+var onePxPNG = []byte{
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+	0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+	0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+	0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+	0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+	0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+}
+
+func TestBuild_CoverPageFirstInSpine(t *testing.T) {
+	doc := buildTestDoc()
+	r := mustBuild(t, doc)
+
+	cover := readZipFile(t, r, "OEBPS/cover.xhtml")
+	if !strings.Contains(cover, doc.Title) {
+		t.Fatalf("cover.xhtml missing title: %s", cover)
+	}
+	if !strings.Contains(cover, "2 items") {
+		t.Fatalf("cover.xhtml missing chapter count text: %s", cover)
+	}
+
+	opf := readZipFile(t, r, "OEBPS/content.opf")
+	spineIdx := strings.Index(opf, "<spine>")
+	firstItemrefIdx := strings.Index(opf[spineIdx:], "<itemref")
+	if !strings.Contains(opf[spineIdx+firstItemrefIdx:spineIdx+firstItemrefIdx+40], `idref="cover"`) {
+		t.Fatalf("cover is not the first spine itemref: %s", opf)
+	}
+}
+
+func TestBuild_ChapterImageEmbedded(t *testing.T) {
+	doc := buildTestDoc()
+	doc.Chapters[0].Image = onePxPNG
+	doc.Chapters[0].ImageType = "image/png"
+	r := mustBuild(t, doc)
+
+	var imgFile *zip.File
+	for _, f := range r.File {
+		if f.Name == "OEBPS/image01.png" {
+			imgFile = f
+		}
+	}
+	if imgFile == nil {
+		t.Fatal("OEBPS/image01.png not found in zip")
+	}
+	rc, err := imgFile.Open()
+	if err != nil {
+		t.Fatalf("open image01.png: %v", err)
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read image01.png: %v", err)
+	}
+	if !bytes.Equal(data, onePxPNG) {
+		t.Fatalf("image01.png not byte-identical to source")
+	}
+
+	chapter := readZipFile(t, r, "OEBPS/"+chapterFileName(0))
+	if !strings.Contains(chapter, `<img src="image01.png"`) {
+		t.Fatalf("chapter does not reference image01.png: %s", chapter)
+	}
+
+	opf := readZipFile(t, r, "OEBPS/content.opf")
+	if !strings.Contains(opf, `href="image01.png" media-type="image/png"`) {
+		t.Fatalf("opf manifest missing image01.png with correct media-type: %s", opf)
+	}
+	if !strings.Contains(opf, `properties="cover-image"`) {
+		t.Fatalf("opf manifest missing cover-image property: %s", opf)
+	}
+}
+
+func TestBuild_UnknownImageTypeDropped(t *testing.T) {
+	doc := buildTestDoc()
+	doc.Chapters[0].Image = onePxPNG
+	doc.Chapters[0].ImageType = "image/bmp"
+	r := mustBuild(t, doc)
+
+	for _, f := range r.File {
+		if strings.HasPrefix(f.Name, "OEBPS/image") {
+			t.Fatalf("unexpected image entry for unsupported type: %s", f.Name)
+		}
+	}
+	chapter := readZipFile(t, r, "OEBPS/"+chapterFileName(0))
+	if strings.Contains(chapter, "<img") {
+		t.Fatalf("chapter unexpectedly references an image: %s", chapter)
+	}
+}
+
+func TestBuild_NoImagesStillValid(t *testing.T) {
+	r := mustBuild(t, buildTestDoc())
+	for _, f := range r.File {
+		if strings.HasPrefix(f.Name, "OEBPS/image") {
+			t.Fatalf("unexpected image entry with no images set: %s", f.Name)
+		}
+	}
+}
+
+func TestBuild_Deterministic(t *testing.T) {
+	doc := buildTestDoc()
+	doc.Chapters[0].Image = onePxPNG
+	doc.Chapters[0].ImageType = "image/png"
+	doc.Date = "1 January 2026"
+
+	buf1 := &bytes.Buffer{}
+	buf2 := &bytes.Buffer{}
+	if err := Build(buf1, doc); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := Build(buf2, doc); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !bytes.Equal(buf1.Bytes(), buf2.Bytes()) {
+		t.Fatalf("Build produced different bytes for identical input")
+	}
+}
+
 func TestBuild_DeterministicID(t *testing.T) {
 	doc := buildTestDoc()
 	buf1 := &bytes.Buffer{}

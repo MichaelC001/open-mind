@@ -39,6 +39,12 @@ export type ApiKeyCreated =
 export type DeviceLinkCreated =
   paths["/device-links"]["post"]["responses"]["201"]["content"]["application/json"];
 
+export type Settings =
+  paths["/settings"]["get"]["responses"]["200"]["content"]["application/json"];
+
+export type PatchSettingsRequest =
+  paths["/settings"]["patch"]["requestBody"]["content"]["application/json"];
+
 export type Highlight =
   paths["/items/{id}/highlights"]["get"]["responses"]["200"]["content"]["application/json"][number];
 
