@@ -152,6 +152,9 @@ func guarded(method, path string) bool {
 		// an email-amplification vector, so both are guarded like other writes.
 		(method == http.MethodPost && strings.HasPrefix(path, "/items/") && strings.HasSuffix(path, "/kindle")) ||
 		(method == http.MethodPost && strings.HasPrefix(path, "/lenses/") && strings.HasSuffix(path, "/kindle")) ||
+		// Highlight creation/deletion mirror the item write endpoints.
+		(method == http.MethodPost && strings.HasPrefix(path, "/items/") && strings.HasSuffix(path, "/highlights")) ||
+		(method == http.MethodDelete && strings.HasPrefix(path, "/highlights/")) ||
 		// API keys and device links mint/revoke credentials; guard them like
 		// other writes. /device-links/claim also sits behind its own, much
 		// stricter claimRateLimit bucket since the code is the credential.
