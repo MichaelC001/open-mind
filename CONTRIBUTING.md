@@ -39,6 +39,22 @@ add a Go route that isn't in the spec.
   Postgres, not mocks; every enrichment job needs an idempotency test (run
   twice, same result).
 
+## Sign-off (DCO)
+
+Contributions are accepted under the
+[Developer Certificate of Origin](https://developercertificate.org). Every
+commit must carry a `Signed-off-by` line matching the commit author — add it
+with:
+
+```bash
+git commit -s
+```
+
+By signing off you certify that you wrote the change (or otherwise have the
+right to submit it) under the project's licence, AGPL-3.0. There is no CLA
+and nothing to sign up for; the sign-off line is the whole ceremony. PRs
+with unsigned commits will be asked to rebase with `git rebase --signoff`.
+
 ## PRs
 
 Small, focused PRs with tests. Describe what and why, and link the issue.
