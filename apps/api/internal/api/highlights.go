@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -59,6 +60,9 @@ func (s *Server) CreateItemHighlight(w http.ResponseWriter, r *http.Request, id 
 	offsetHint := 0
 	if req.OffsetHint != nil {
 		offsetHint = *req.OffsetHint
+	}
+	if offsetHint < 0 || offsetHint > math.MaxInt32 {
+		offsetHint = 0
 	}
 
 	ctx := r.Context()

@@ -63,7 +63,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 }
 
 const createQuoteItem = `-- name: CreateQuoteItem :one
-INSERT INTO items (user_id, body, card_type) VALUES ($1, $2, 'quote') RETURNING id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count
+INSERT INTO items (user_id, body, card_type, url) VALUES ($1, $2, 'quote', '') RETURNING id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count
 `
 
 type CreateQuoteItemParams struct {
