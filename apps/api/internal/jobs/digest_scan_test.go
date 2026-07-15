@@ -124,16 +124,22 @@ func runDigestScan(t *testing.T, s *store.Store, rc *river.Client[pgx.Tx]) {
 }
 
 // TestScanDigestsEnqueuesNewItemsOnly seeds a daily lens whose last digest
-// was 2 days ago, with one item created before that stamp and one created
-// after (i.e., now). Only the post-stamp item should end up in the enqueued
-// send_kindle job, and the stamp should advance.
+// was 2 days ago, with one item created well before that stamp (2h earlier,
+// outside the 1h enrichment-grace window), one created 30min before the
+// stamp (inside the grace window — a late-enriched item), and one created
+// after. The grace-window and post-stamp items should end up in the enqueued
+// send_kindle job, the old one must not, and the stamp should advance.
 func TestScanDigestsEnqueuesNewItemsOnly(t *testing.T) {
 	s, rc := newDigestScanTestStore(t)
 	ctx := context.Background()
 
 	pre := newDigestScanItem(t, s, "pre-stamp", "old content")
-	if _, err := s.Pool.Exec(ctx, `UPDATE items SET created_at = now() - interval '3 days' WHERE id = $1`, pre.ID); err != nil {
+	if _, err := s.Pool.Exec(ctx, `UPDATE items SET created_at = now() - interval '2 days 2 hours' WHERE id = $1`, pre.ID); err != nil {
 		t.Fatalf("backdating pre-stamp item: %v", err)
+	}
+	grace := newDigestScanItem(t, s, "grace-window", "late-enriched content")
+	if _, err := s.Pool.Exec(ctx, `UPDATE items SET created_at = now() - interval '2 days' - interval '30 minutes' WHERE id = $1`, grace.ID); err != nil {
+		t.Fatalf("backdating grace item: %v", err)
 	}
 	lens := createDigestLens(t, s, "Daily notes", "daily")
 	if _, err := s.Pool.Exec(ctx, `UPDATE lenses SET last_digest_at = now() - interval '2 days' WHERE id = $1`, lens.ID); err != nil {
@@ -147,8 +153,12 @@ func TestScanDigestsEnqueuesNewItemsOnly(t *testing.T) {
 	if len(found) != 1 {
 		t.Fatalf("send_kindle jobs = %d, want 1", len(found))
 	}
-	if len(found[0].ItemIDs) != 1 || found[0].ItemIDs[0] != post.ID {
-		t.Errorf("item_ids = %v, want only %v", found[0].ItemIDs, post.ID)
+	got := map[uuid.UUID]bool{}
+	for _, id := range found[0].ItemIDs {
+		got[id] = true
+	}
+	if len(got) != 2 || !got[post.ID] || !got[grace.ID] {
+		t.Errorf("item_ids = %v, want exactly {post %v, grace %v} (pre %v excluded)", found[0].ItemIDs, post.ID, grace.ID, pre.ID)
 	}
 
 	updated, err := s.Queries.GetLens(ctx, db.GetLensParams{UserID: digestScanTestUser, ID: lens.ID})

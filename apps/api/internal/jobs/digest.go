@@ -18,6 +18,15 @@ import (
 	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
 
+// digestGrace widens the new-items filter below last_digest_at by an hour.
+// An item's created_at is its save time, but async enrichment can make it
+// enter a Lens's rule (tags, card type, body) only later — a strict
+// created_at > last_digest_at cut would drop items that were still being
+// enriched when the previous digest went out. The grace catches those
+// late-enriched items at the cost of a rare duplicate across consecutive
+// digests (an item created in the hour before a stamp may appear twice).
+const digestGrace = time.Hour
+
 // ScanDigestsArgs is the River job payload for the periodic digest scan. It
 // carries no state: the worker lists every Lens with a non-empty
 // digest_schedule itself and decides per-lens whether it is due.
@@ -76,7 +85,7 @@ func (w *ScanDigestsWorker) processLens(ctx context.Context, lens db.Lense) erro
 		if item.Body == "" {
 			continue
 		}
-		if lens.LastDigestAt.Valid && !item.CreatedAt.Time.After(lens.LastDigestAt.Time) {
+		if lens.LastDigestAt.Valid && !item.CreatedAt.Time.After(lens.LastDigestAt.Time.Add(-digestGrace)) {
 			continue
 		}
 		ids = append(ids, item.ID)
@@ -88,12 +97,25 @@ func (w *ScanDigestsWorker) processLens(ctx context.Context, lens db.Lense) erro
 		return nil
 	}
 
+	// Enqueue and stamp in one transaction: a crash between a committed
+	// enqueue and the stamp would re-send the same digest on the next scan,
+	// so both land together or not at all (a rollback means the next scan
+	// retries cleanly).
+	tx, err := w.Store.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	lensID := lens.ID
-	if _, err := w.River.Insert(ctx, SendKindleArgs{UserID: lens.UserID, LensID: &lensID, ItemIDs: ids}, nil); err != nil {
+	if _, err := w.River.InsertTx(ctx, tx, SendKindleArgs{UserID: lens.UserID, LensID: &lensID, ItemIDs: ids}, nil); err != nil {
 		return fmt.Errorf("enqueueing send_kindle: %w", err)
 	}
-	if _, err := w.Store.Queries.StampLensDigest(ctx, db.StampLensDigestParams{UserID: lens.UserID, ID: lens.ID}); err != nil {
+	if _, err := w.Store.Queries.WithTx(tx).StampLensDigest(ctx, db.StampLensDigestParams{UserID: lens.UserID, ID: lens.ID}); err != nil {
 		return fmt.Errorf("stamping last_digest_at: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing digest tx: %w", err)
 	}
 	return nil
 }
