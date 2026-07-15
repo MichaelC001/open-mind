@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,12 +17,81 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/rohithgilla12/openmind/api/internal/ai"
+	"github.com/rohithgilla12/openmind/api/internal/enrich"
 	"github.com/rohithgilla12/openmind/api/internal/epub"
 	"github.com/rohithgilla12/openmind/api/internal/mailer"
 	"github.com/rohithgilla12/openmind/api/internal/search"
 	"github.com/rohithgilla12/openmind/api/internal/store"
 	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
+
+// maxLeadImageBytes bounds how much of a lead image response body
+// fetchLeadImage will read: 5 MiB, plus one extra byte so a response
+// exactly at the cap can still be distinguished from one that overflows it.
+const maxLeadImageBytes = 5<<20 + 1
+
+// allowedLeadImageTypes is the set of sniffed content types fetchLeadImage
+// accepts; anything else (including text/html error pages served with a
+// 200) is treated as "no image".
+var allowedLeadImageTypes = map[string]bool{
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+// fetchLeadImage best-effort downloads the image at url and returns its
+// bytes and a sniffed content type suitable for epub.Chapter.ImageType. It
+// never returns an error: any failure (network error, non-2xx status,
+// over-cap body, or a content type outside the allowlist) yields (nil, "")
+// and is logged at debug level, since a missing hero image must never fail
+// or delay a Kindle send. client defaults to enrich.SafeHTTPClient(10s)
+// when nil.
+func fetchLeadImage(ctx context.Context, client *http.Client, url string) ([]byte, string) {
+	if client == nil {
+		client = enrich.SafeHTTPClient(10 * time.Second)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		slog.Debug("send_kindle: building lead image request", "url", url, "error", err)
+		return nil, ""
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Debug("send_kindle: fetching lead image", "url", url, "error", err)
+		return nil, ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		slog.Debug("send_kindle: lead image non-2xx response", "url", url, "status", resp.StatusCode)
+		return nil, ""
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxLeadImageBytes))
+	if err != nil {
+		slog.Debug("send_kindle: reading lead image body", "url", url, "error", err)
+		return nil, ""
+	}
+	if len(data) > maxLeadImageBytes-1 {
+		slog.Debug("send_kindle: lead image exceeds size cap; skipping", "url", url)
+		return nil, ""
+	}
+	if len(data) == 0 {
+		return nil, ""
+	}
+
+	contentType := http.DetectContentType(data)
+	// DetectContentType can append parameters (e.g. "image/png; ..." never
+	// happens in practice for sniffed types, but normalize defensively).
+	contentType = strings.SplitN(contentType, ";", 2)[0]
+	if !allowedLeadImageTypes[contentType] {
+		slog.Debug("send_kindle: lead image content type not allowed", "url", url, "content_type", contentType)
+		return nil, ""
+	}
+	return data, contentType
+}
 
 // kindleDigestCap is the maximum number of items folded into a single Lens
 // digest EPUB, so a broad rule never produces an unreasonably large book.
@@ -137,9 +209,32 @@ func (w *SendKindleWorker) sendItem(ctx context.Context, uid, itemID uuid.UUID) 
 	doc := epub.Document{
 		Title:    title,
 		Author:   "Openmind",
-		Chapters: []epub.Chapter{{Title: title, Body: item.Body}},
+		Chapters: []epub.Chapter{w.buildChapter(ctx, title, item)},
+		Date:     time.Now().UTC().Format("2 January 2006"),
 	}
 	return w.send(ctx, uid, doc, fmt.Sprintf("openmind-%s.epub", shortID(item.ID)))
+}
+
+// buildChapter turns item into an epub.Chapter with title/body, best-effort
+// embedding item's lead image as a chapter hero. LeadImageUrl can be a
+// relative "/assets/<id>" path for a user-uploaded image — there is no base
+// URL available in the worker to resolve it against, so relative URLs are
+// skipped entirely rather than guessed at; only absolute (http/https) lead
+// image URLs are fetched.
+func (w *SendKindleWorker) buildChapter(ctx context.Context, title string, item db.Item) epub.Chapter {
+	ch := epub.Chapter{Title: title, Body: item.Body}
+	if item.LeadImageUrl == "" || strings.HasPrefix(item.LeadImageUrl, "/") {
+		return ch
+	}
+	if !strings.HasPrefix(item.LeadImageUrl, "http://") && !strings.HasPrefix(item.LeadImageUrl, "https://") {
+		return ch
+	}
+	data, contentType := fetchLeadImage(ctx, nil, item.LeadImageUrl)
+	if data != nil {
+		ch.Image = data
+		ch.ImageType = contentType
+	}
+	return ch
 }
 
 func (w *SendKindleWorker) sendLensDigest(ctx context.Context, uid, lensID uuid.UUID) error {
@@ -166,7 +261,7 @@ func (w *SendKindleWorker) sendLensDigest(ctx context.Context, uid, lensID uuid.
 		if title == "" {
 			title = item.Url
 		}
-		chapters = append(chapters, epub.Chapter{Title: title, Body: item.Body})
+		chapters = append(chapters, w.buildChapter(ctx, title, item))
 		if len(chapters) >= kindleDigestCap {
 			break
 		}
@@ -177,7 +272,7 @@ func (w *SendKindleWorker) sendLensDigest(ctx context.Context, uid, lensID uuid.
 	}
 
 	title := fmt.Sprintf("Openmind digest — %s — %s", lens.Name, time.Now().Format("2006-01-02"))
-	doc := epub.Document{Title: title, Author: "Openmind", Chapters: chapters}
+	doc := epub.Document{Title: title, Author: "Openmind", Chapters: chapters, Date: time.Now().UTC().Format("2 January 2006")}
 	return w.send(ctx, uid, doc, fmt.Sprintf("openmind-%s.epub", shortID(lens.ID)))
 }
 
@@ -212,7 +307,7 @@ func (w *SendKindleWorker) sendItemIDsDigest(ctx context.Context, uid, lensID uu
 		if title == "" {
 			title = item.Url
 		}
-		chapters = append(chapters, epub.Chapter{Title: title, Body: item.Body})
+		chapters = append(chapters, w.buildChapter(ctx, title, item))
 	}
 	if len(chapters) == 0 {
 		slog.Warn("send_kindle: digest item set has no items with bodies; nothing to send", "lens_id", lensID)
@@ -220,7 +315,7 @@ func (w *SendKindleWorker) sendItemIDsDigest(ctx context.Context, uid, lensID uu
 	}
 
 	title := fmt.Sprintf("Openmind digest — %s — %s", lens.Name, time.Now().Format("2006-01-02"))
-	doc := epub.Document{Title: title, Author: "Openmind", Chapters: chapters}
+	doc := epub.Document{Title: title, Author: "Openmind", Chapters: chapters, Date: time.Now().UTC().Format("2 January 2006")}
 	return w.send(ctx, uid, doc, fmt.Sprintf("openmind-%s.epub", shortID(lens.ID)))
 }
 
