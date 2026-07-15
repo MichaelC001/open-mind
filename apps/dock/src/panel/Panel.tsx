@@ -138,6 +138,10 @@ export function Panel() {
   // window instead of leaving a panel the user never asked to see.
   const confirmShownPanelRef = useRef(false);
   const confirmTitleRef = useRef("");
+  // Whether the confirm strip's tag input held focus when the strip started
+  // going away — captured at the transition points (submit / Esc / idle),
+  // since document.activeElement is already gone once the input unmounts.
+  const confirmHadFocusRef = useRef(false);
 
   const mode = detectMode(query);
   const queryEmpty = query.trim().length === 0;
@@ -267,8 +271,23 @@ export function Panel() {
   }, [confirm]);
 
   useEffect(() => {
-    if (confirm.kind === "confirming") {
+    if (confirm.kind !== "confirming") return;
+    // Don't steal focus mid-keystroke: if the user is typing in the search
+    // box when a background quick-save lands, render the strip passively.
+    // Autofocus only when the search input isn't focused, or when the panel
+    // was just shown purely for this confirm.
+    if (confirmShownPanelRef.current || document.activeElement !== inputRef.current) {
       confirmInputRef.current?.focus();
+    }
+  }, [confirm]);
+
+  // When the strip goes away and the tag input owned focus, hand focus back
+  // to the search input — but never yank it from anywhere else.
+  useEffect(() => {
+    if (confirm.kind !== "hidden" && confirm.kind !== "done") return;
+    if (confirmHadFocusRef.current) {
+      confirmHadFocusRef.current = false;
+      inputRef.current?.focus();
     }
   }, [confirm]);
 
@@ -278,6 +297,7 @@ export function Panel() {
     if (confirmIdleTimerRef.current) clearTimeout(confirmIdleTimerRef.current);
     if (confirm.kind !== "confirming") return;
     confirmIdleTimerRef.current = setTimeout(() => {
+      confirmHadFocusRef.current = document.activeElement === confirmInputRef.current;
       dispatchConfirm({ type: "idle-timeout" });
       void hidePanelIfShownForConfirm();
     }, CONFIRM_IDLE_MS);
@@ -310,11 +330,14 @@ export function Panel() {
   async function onConfirmSubmit() {
     if (confirm.kind !== "confirming") return;
     const { itemId, tags } = confirm;
+    confirmHadFocusRef.current = document.activeElement === confirmInputRef.current;
     dispatchConfirm({ type: "submit" });
     try {
       await setUserTags(itemId, parseTags(tags), settings ?? undefined);
       dispatchConfirm({ type: "submit-ok" });
     } catch {
+      // Strip stays up (back to confirming), so no focus hand-back is due.
+      confirmHadFocusRef.current = false;
       setConfirmError("Couldn't save tags — try again.");
       dispatchConfirm({ type: "submit-failed" });
     }
@@ -326,6 +349,8 @@ export function Panel() {
       void onConfirmSubmit();
     } else if (e.key === "Escape") {
       e.preventDefault();
+      // Esc lands on the tag input itself, so it owned focus by definition.
+      confirmHadFocusRef.current = true;
       dispatchConfirm({ type: "dismiss" });
       void hidePanelIfShownForConfirm();
     }
