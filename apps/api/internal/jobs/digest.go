@@ -99,7 +99,7 @@ func (w *ScanDigestsWorker) processLens(ctx context.Context, lens db.Lense, warn
 	}
 
 	if _, err := resolveKindleRecipient(ctx, w.Store, lens.UserID, w.Deps.To); err != nil {
-		slog.Warn("scan_digests: no deliverable recipient, skipping lens", "lens_id", lens.ID, "user_id", lens.UserID)
+		slog.Info("scan_digests: no deliverable recipient, skipping lens", "lens_id", lens.ID, "user_id", lens.UserID, "err", err)
 		return nil
 	}
 

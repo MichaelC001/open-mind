@@ -44,9 +44,11 @@ var allowedLeadImageTypes = map[string]bool{
 // bytes and a sniffed content type suitable for epub.Chapter.ImageType. It
 // never returns an error: any failure (network error, non-2xx status,
 // over-cap body, or a content type outside the allowlist) yields (nil, "")
-// and is logged at debug level, since a missing hero image must never fail
-// or delay a Kindle send. client defaults to enrich.SafeHTTPClient(10s)
-// when nil.
+// and is logged (network failures at debug; a size-cap or content-type
+// rejection at warn, since those point at extractor problems rather than
+// transient network noise), since a missing hero image must never fail or
+// delay a Kindle send. client defaults to enrich.SafeHTTPClient(10s) when
+// nil.
 func fetchLeadImage(ctx context.Context, client *http.Client, url string) ([]byte, string) {
 	if client == nil {
 		client = enrich.SafeHTTPClient(10 * time.Second)
@@ -75,7 +77,7 @@ func fetchLeadImage(ctx context.Context, client *http.Client, url string) ([]byt
 		return nil, ""
 	}
 	if len(data) > maxLeadImageBytes-1 {
-		slog.Debug("send_kindle: lead image exceeds size cap; skipping", "url", url)
+		slog.Warn("send_kindle: lead image exceeds size cap; skipping", "url", url)
 		return nil, ""
 	}
 	if len(data) == 0 {
@@ -87,7 +89,7 @@ func fetchLeadImage(ctx context.Context, client *http.Client, url string) ([]byt
 	// happens in practice for sniffed types, but normalize defensively).
 	contentType = strings.SplitN(contentType, ";", 2)[0]
 	if !allowedLeadImageTypes[contentType] {
-		slog.Debug("send_kindle: lead image content type not allowed", "url", url, "content_type", contentType)
+		slog.Warn("send_kindle: lead image content type not allowed", "url", url, "content_type", contentType)
 		return nil, ""
 	}
 	return data, contentType

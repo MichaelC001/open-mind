@@ -322,7 +322,7 @@ See [Multi-user mode (Clerk)](#multi-user-mode-clerk) above for real multi-user 
 
 ## Send to Kindle
 
-Any item, or a Lens's current matches as a digest, can be e-mailed to your Kindle as an EPUB: `POST /items/{id}/kindle` (proxied at `/api/items/{id}/kindle`) or `POST /lenses/{id}/kindle` (proxied at `/api/lenses/{id}/kindle`). Both are queued asynchronously — the request returns `202 {"queued":true}` immediately, and delivery happens in the background via a River job. A Lens digest is capped at the 25 most recent matching items with a body, one EPUB chapter per item.
+Any item, or a Lens's current matches as a digest, can be e-mailed to your Kindle as an EPUB: `POST /items/{id}/kindle` (proxied at `/api/items/{id}/kindle`) or `POST /lenses/{id}/kindle` (proxied at `/api/lenses/{id}/kindle`). Both are queued asynchronously — the request returns `202 {"queued":true}` immediately, and delivery happens in the background via a River job. A Lens digest is capped at 25 matching items with a body, one EPUB chapter per item.
 
 The feature is off until you configure outbound SMTP:
 
@@ -351,4 +351,4 @@ The SMTP transport (`SMTP_HOST` + `SMTP_FROM`) must be configured, and a recipie
 
 ### Scheduled Lens digests
 
-Any Lens can be sent on a schedule: pick **Daily** or **Weekly** (plus a weekday) in the Lens header. A scheduled digest contains only items that are **new since the last digest** (with an hour's grace for late-finishing enrichment) — nothing new means no e-mail. Scans run hourly inside the worker; sends land near the top of the hour, in UTC (per-user timezones aren't supported yet). The Lens header shows when the digest last went out.
+Any Lens can be sent on a schedule: pick **Daily** or **Weekly** (plus a weekday) in the Lens header. A scheduled digest contains only items that are **new since the last digest** (with an hour's grace for late-finishing enrichment) — nothing new means no e-mail. Scans run hourly from when the worker starts (times are UTC for weekly-day matching; per-user timezones aren't supported yet). The Lens header shows when the digest last went out.

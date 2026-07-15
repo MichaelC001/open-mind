@@ -27,15 +27,25 @@ const kindleNotConfiguredMsg = "kindle is not configured — set your Kindle add
 // user setting alone can never satisfy this — it only ever supplies a
 // recipient, and without a configured SMTP transport there is nothing to
 // send with.
-func (s *Server) kindleConfiguredFor(ctx context.Context, uid uuid.UUID) bool {
+//
+// A non-nil error means the configuration check itself failed (e.g. a DB
+// error unrelated to "no such setting") — callers must surface that as a
+// 500, not silently treat it as "not configured".
+func (s *Server) kindleConfiguredFor(ctx context.Context, uid uuid.UUID) (bool, error) {
 	if !s.kindle.SMTPConfigured {
-		return false
+		return false, nil
 	}
 	if s.kindle.EnvRecipient {
-		return true
+		return true, nil
 	}
 	_, err := s.store.Queries.GetUserSetting(ctx, db.GetUserSettingParams{UserID: uid, Key: kindleSettingKey})
-	return err == nil
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // kindleMaxAttempts caps River retries for a send_kindle job: SMTP failures
@@ -60,7 +70,13 @@ func (s *Server) SendItemToKindle(w http.ResponseWriter, r *http.Request, id ope
 		writeError(w, http.StatusInternalServerError, "could not fetch item")
 		return
 	}
-	if !s.kindleConfiguredFor(ctx, uid) {
+	configured, err := s.kindleConfiguredFor(ctx, uid)
+	if err != nil {
+		slog.Error("checking kindle configuration", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not check kindle configuration")
+		return
+	}
+	if !configured {
 		writeError(w, http.StatusConflict, kindleNotConfiguredMsg)
 		return
 	}
@@ -96,7 +112,13 @@ func (s *Server) SendLensToKindle(w http.ResponseWriter, r *http.Request, id ope
 		writeError(w, http.StatusInternalServerError, "could not fetch lens")
 		return
 	}
-	if !s.kindleConfiguredFor(ctx, uid) {
+	configured, err := s.kindleConfiguredFor(ctx, uid)
+	if err != nil {
+		slog.Error("checking kindle configuration", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not check kindle configuration")
+		return
+	}
+	if !configured {
 		writeError(w, http.StatusConflict, kindleNotConfiguredMsg)
 		return
 	}

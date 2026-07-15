@@ -272,6 +272,49 @@ func TestScanDigestsSkipsWhenNoRecipient(t *testing.T) {
 	}
 }
 
+// TestScanDigestsIsolatesBrokenLens seeds a lens with a corrupt stored rule
+// (invalid JSON) alongside a normal, valid lens for the same scan. The
+// broken lens must fail and be skipped without aborting the run — the valid
+// lens still gets its item enqueued and its stamp advanced, proving Work's
+// per-lens error isolation (a bad rule for one lens must never block
+// digests for every other lens).
+func TestScanDigestsIsolatesBrokenLens(t *testing.T) {
+	s, rc := newDigestScanTestStore(t)
+	ctx := context.Background()
+
+	broken := createDigestLens(t, s, "Broken", "daily")
+	// Valid JSON (jsonb rejects anything else at insert time) but a type
+	// mismatch against kindleLensRule.Q (string), so json.Unmarshal fails.
+	if _, err := s.Pool.Exec(ctx, `UPDATE lenses SET rule = '{"q": 123}' WHERE id = $1`, broken.ID); err != nil {
+		t.Fatalf("corrupting rule: %v", err)
+	}
+
+	newDigestScanItem(t, s, "one", "content")
+	valid := createDigestLens(t, s, "Valid", "daily")
+
+	runDigestScan(t, s, rc)
+
+	if found := listSendKindleJobs(t, s); len(found) != 1 {
+		t.Fatalf("send_kindle jobs = %d, want 1 (only the valid lens)", len(found))
+	}
+
+	updatedValid, err := s.Queries.GetLens(ctx, db.GetLensParams{UserID: digestScanTestUser, ID: valid.ID})
+	if err != nil {
+		t.Fatalf("reload valid lens: %v", err)
+	}
+	if !updatedValid.LastDigestAt.Valid {
+		t.Errorf("valid lens last_digest_at not stamped despite broken sibling lens")
+	}
+
+	updatedBroken, err := s.Queries.GetLens(ctx, db.GetLensParams{UserID: digestScanTestUser, ID: broken.ID})
+	if err != nil {
+		t.Fatalf("reload broken lens: %v", err)
+	}
+	if updatedBroken.LastDigestAt.Valid {
+		t.Errorf("broken lens last_digest_at = %+v, want unset (never processed successfully)", updatedBroken.LastDigestAt)
+	}
+}
+
 // TestScanDigestsProceedsWithUserKindleEmail asserts that a due lens for a
 // user with a kindle_email setting proceeds to enqueue+stamp even with no
 // server-wide fallback configured — the per-user setting alone is enough to

@@ -129,6 +129,38 @@ func TestLensCreateValidation(t *testing.T) {
 	}
 }
 
+// TestLensCreateWithDigestSchedule verifies a digestSchedule supplied at
+// creation time is validated, persisted, and echoed immediately (not just
+// settable via a subsequent PATCH).
+func TestLensCreateWithDigestSchedule(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+
+	resp := postJSON(t, srv.URL+"/lenses", `{"name":"Weekly at create","rule":{"q":"news"},"digestSchedule":"weekly:4"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	var created lensResp
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	resp.Body.Close()
+	if created.DigestSchedule != "weekly:4" {
+		t.Errorf("digestSchedule echo = %q, want weekly:4", created.DigestSchedule)
+	}
+
+	got := doJSON(t, http.MethodGet, srv.URL+"/lenses/"+created.ID, "")
+	var refetched lensResp
+	if err := json.NewDecoder(got.Body).Decode(&refetched); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	got.Body.Close()
+	if refetched.DigestSchedule != "weekly:4" {
+		t.Errorf("persisted digestSchedule = %q, want weekly:4", refetched.DigestSchedule)
+	}
+}
+
 // TestLensUpdateDigestSchedule covers valid weekly schedule persistence,
 // rejection of an out-of-range weekday and an unrecognised schedule keyword,
 // and clearing back to disabled via an explicit empty string.
@@ -170,7 +202,7 @@ func TestLensUpdateDigestSchedule(t *testing.T) {
 		t.Errorf("persisted digestSchedule = %q, want weekly:3", refetched.DigestSchedule)
 	}
 
-	for _, bad := range []string{"weekly:7", "hourly"} {
+	for _, bad := range []string{"weekly:7", "hourly", "weekly:"} {
 		badResp := doJSON(t, http.MethodPatch, srv.URL+"/lenses/"+lens.ID, `{"name":"Weekly digest","rule":{"q":"news"},"digestSchedule":"`+bad+`"}`)
 		if badResp.StatusCode != http.StatusBadRequest {
 			t.Errorf("digestSchedule %q status = %d, want 400", bad, badResp.StatusCode)

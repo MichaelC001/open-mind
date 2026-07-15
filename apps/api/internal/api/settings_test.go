@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -97,6 +98,14 @@ func TestSettingsValidation(t *testing.T) {
 	defer noop.Body.Close()
 	if noop.StatusCode != http.StatusOK {
 		t.Errorf("absent field status = %d, want 200", noop.StatusCode)
+	}
+
+	// Address itself well-formed, but exceeds RFC 5321's 254-octet limit.
+	longLocal := strings.Repeat("a", 250)
+	tooLong := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"kindleEmail":"`+longLocal+`@example.com"}`)
+	defer tooLong.Body.Close()
+	if tooLong.StatusCode != http.StatusBadRequest {
+		t.Errorf("over-length email status = %d, want 400", tooLong.StatusCode)
 	}
 }
 
