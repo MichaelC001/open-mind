@@ -1,0 +1,650 @@
+openapi: 3.0.3
+info: { title: Openmind API, version: 0.0.1 }
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      security: []
+      responses:
+        "200":
+          description: liveness
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string }
+  /items:
+    post:
+      operationId: createItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateItemRequest" }
+      responses:
+        "201":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Item" }
+    get:
+      operationId: listItems
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Item" }
+  /items/{id}:
+    get:
+      operationId: getItem
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: item detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ItemDetail" }
+        "404":
+          description: not found
+    patch:
+      operationId: patchItem
+      description: "Edit an item. Currently supports replacing the full user-tags list (userTags). Tags are canonicalised server-side (trimmed, lowercased, deduped, capped)."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateItemRequest" }
+      responses:
+        "200":
+          description: updated item detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ItemDetail" }
+        "400": { description: bad request }
+        "404": { description: not found }
+    delete:
+      operationId: deleteItem
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: deleted }
+        "404": { description: not found }
+  /items/{id}/links:
+    get:
+      operationId: listItemLinks
+      summary: Items linked to this item (both directions)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Linked items, newest link first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Item" }
+        "404": { description: not found }
+    post:
+      operationId: createItemLink
+      summary: Link this item to another (undirected, idempotent)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toId]
+              properties:
+                toId: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Updated linked list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Item" }
+        "400": { description: bad request }
+        "404": { description: not found }
+  /items/{id}/links/{toId}:
+    delete:
+      operationId: deleteItemLink
+      summary: Remove a link
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: toId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed }
+        "404": { description: not found }
+  /items/{id}/kindle:
+    post:
+      operationId: sendItemToKindle
+      summary: Send this item to Kindle as an EPUB
+      description: "Builds an EPUB from the item's body and e-mails it to the configured KINDLE_EMAIL address. Queued asynchronously; 409 when Send-to-Kindle is not configured, 422 when the item has no body to send."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202":
+          description: queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queued]
+                properties:
+                  queued: { type: boolean }
+        "404": { description: not found }
+        "409": { description: kindle is not configured }
+        "422": { description: item has no body to send }
+  /assets:
+    post:
+      operationId: createAsset
+      description: "Upload a local image as a first-class image card (multipart field 'file')."
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201":
+          description: created image item
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Item" }
+        "400": { description: bad request }
+        "413": { description: payload too large }
+        "415": { description: unsupported media type }
+  /assets/{id}:
+    get:
+      operationId: getAsset
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: image bytes
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/gif: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            image/avif: { schema: { type: string, format: binary } }
+        "404": { description: not found }
+  /export:
+    get:
+      operationId: exportItems
+      responses:
+        "200":
+          description: full library export
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ItemDetail" }
+  /import:
+    post:
+      operationId: importItems
+      description: "Bulk-import saved items from an export file (multipart field 'file'). Recognises Netscape bookmark HTML (browsers, Pocket, Raindrop, Pinboard, Instapaper), CSV exports with a URL column (Pocket, Raindrop), and a plain newline-delimited URL list. Each new URL becomes a pending item and is enriched asynchronously; URLs already saved are skipped, so re-importing is safe."
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: import summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportResult" }
+        "400": { description: bad request / unparseable file }
+        "413": { description: payload too large }
+  /lenses:
+    get:
+      operationId: listLenses
+      description: "List the caller's saved Lenses (saved query/rule collections), newest first."
+      responses:
+        "200":
+          description: lenses
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Lens" }
+    post:
+      operationId: createLens
+      description: "Create a Lens: a named, saved search rule. New saves matching the rule appear through it automatically."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateLensRequest" }
+      responses:
+        "201":
+          description: created lens
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lens" }
+        "400": { description: bad request }
+  /lenses/{id}:
+    get:
+      operationId: getLens
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: lens
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lens" }
+        "404": { description: not found }
+    patch:
+      operationId: updateLens
+      description: "Rename a Lens and/or replace its rule."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateLensRequest" }
+      responses:
+        "200":
+          description: updated lens
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lens" }
+        "400": { description: bad request }
+        "404": { description: not found }
+    delete:
+      operationId: deleteLens
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: deleted }
+        "404": { description: not found }
+  /lenses/{id}/items:
+    get:
+      operationId: getLensItems
+      description: "Run the Lens's saved rule and return the ranked items it currently matches — a live view, so new saves appear here without manual filing."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: items matching the lens
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResponse" }
+        "404": { description: not found }
+  /lenses/{id}/kindle:
+    post:
+      operationId: sendLensToKindle
+      summary: Send this Lens's current matches to Kindle as a digest EPUB
+      description: "Runs the Lens's saved rule, builds a multi-chapter EPUB digest (one chapter per matching item with a body, capped at 25), and e-mails it to the configured KINDLE_EMAIL address. Queued asynchronously; 409 when Send-to-Kindle is not configured, 422 when no matching items have a body to send."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202":
+          description: queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queued]
+                properties:
+                  queued: { type: boolean }
+        "404": { description: not found }
+        "409": { description: kindle is not configured }
+        "422": { description: no matching items with a body to send }
+  /feeds:
+    get:
+      operationId: listFeeds
+      description: "List the caller's RSS/Atom feed subscriptions, newest first."
+      responses:
+        "200":
+          description: feeds
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Feed" }
+    post:
+      operationId: createFeed
+      description: "Subscribe to an RSS/Atom feed. Its current entries are backfilled as pending items immediately; a periodic poll saves new entries as they publish."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFeedRequest" }
+      responses:
+        "201":
+          description: created feed subscription
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Feed" }
+        "400": { description: invalid url }
+        "409": { description: already subscribed }
+        "502": { description: feed could not be fetched or parsed }
+  /feeds/{id}:
+    delete:
+      operationId: deleteFeed
+      description: "Unsubscribe from a feed. Already-imported items are kept; polling stops."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: deleted }
+        "404": { description: not found }
+  /desk:
+    get:
+      operationId: getDesk
+      description: "The caller's Desk: pinned items ordered newest-pinned first."
+      responses:
+        "200":
+          description: pinned items
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Item" }
+  /drift:
+    get:
+      operationId: getDrift
+      description: "Today's Drift batch: up to 5 resurfacing candidates (enriched, unpinned, not drifted in the last 30 days) ordered never-drifted-first then oldest-saved, plus the total candidate count."
+      responses:
+        "200":
+          description: drift batch
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DriftResponse" }
+  /drift/{id}:
+    post:
+      operationId: driftItem
+      description: "Act on a drifted item: always marks it drifted now (won't resurface for 30 days); when keep is true, also pins it to the Desk."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DriftActionRequest" }
+      responses:
+        "200":
+          description: acted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+        "404": { description: not found }
+  /search:
+    get:
+      operationId: searchItems
+      description: "Text search (q), colour-proximity search (color), or both fused. Set parse=true to interpret q as a natural-language query — the AI provider splits it into a text portion, a colour, and card-type filters, all fused into one search. At least one of q or color is required."
+      parameters:
+        - { name: q, in: query, required: false, schema: { type: string } }
+        - { name: color, in: query, required: false, schema: { type: string }, description: "Hex (#RRGGBB) or named colour (e.g. cobalt, terracotta); ranks items by nearest palette colour." }
+        - { name: parse, in: query, required: false, schema: { type: boolean }, description: "Interpret q as a natural-language query, splitting it into text + colour + card-type filters via the AI provider. Falls back to a plain text search when no AI provider is configured." }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResponse" }
+  /api-keys:
+    get:
+      operationId: listApiKeys
+      description: "List the caller's API keys, newest first. Full key values are never returned after creation."
+      responses:
+        "200":
+          description: api keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ApiKey" }
+    post:
+      operationId: createApiKey
+      description: "Create a new API key. The full key is returned exactly once — store it now."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateApiKeyRequest" }
+      responses:
+        "201":
+          description: created api key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiKeyCreated" }
+        "400": { description: bad request }
+  /api-keys/{id}:
+    delete:
+      operationId: revokeApiKey
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: revoked }
+        "404": { description: not found }
+  /device-links:
+    post:
+      operationId: createDeviceLink
+      description: "Mint a short-lived device-link code (10 minute TTL) that a second device can redeem via POST /device-links/claim to obtain its own API key."
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDeviceLinkRequest" }
+      responses:
+        "201":
+          description: device link code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceLinkCreated" }
+  /device-links/claim:
+    post:
+      operationId: claimDeviceLink
+      security: []
+      description: "Redeem a device-link code for a fresh API key. The code itself is the credential — this endpoint bypasses bearer auth but is rate-limited per IP. Unknown, expired, or already-claimed codes return an identical 404 to avoid leaking which case applied."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClaimDeviceLinkRequest" }
+      responses:
+        "201":
+          description: minted api key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceLinkClaimed" }
+        "404": { description: unknown, expired, or already-claimed code }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  schemas:
+    CreateItemRequest:
+      type: object
+      description: "Exactly one of url or note must be provided."
+      properties:
+        url: { type: string, format: uri }
+        note: { type: string, minLength: 1, maxLength: 10000 }
+    Item:
+      type: object
+      required: [id, url, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        leadImageUrl: { type: string }
+        tags: { type: array, items: { type: string } }
+        userTags: { type: array, items: { type: string } }
+        palette: { type: array, items: { type: string } }
+        cardType: { type: string, enum: [article, product, book, recipe, video, tweet, image, note, quote] }
+        status: { type: string, enum: [pending, enriched, failed] }
+        createdAt: { type: string, format: date-time }
+        pinnedAt: { type: string, format: date-time, nullable: true, description: "When the item was pinned to the Desk; null if not pinned." }
+        pageCount: { type: integer, nullable: true, description: "Page count when the item's original is a stored PDF; null otherwise." }
+    ItemDetail:
+      allOf:
+        - $ref: "#/components/schemas/Item"
+        - type: object
+          required: [body]
+          properties:
+            body: { type: string }
+    UpdateItemRequest:
+      type: object
+      description: "Fields to update on an item. Both userTags and pinned are optional; omit both for a no-op edit that is rejected as a bad request."
+      properties:
+        userTags: { type: array, items: { type: string }, description: "Full replacement user-tags list. An empty array clears all user tags." }
+        pinned: { type: boolean, description: "Pin (true) or unpin (false) the item on the Desk. Pinning sets pinnedAt to now; unpinning clears it." }
+    DriftResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Item" }
+        total: { type: integer, description: "Total current drift candidates (for the 'n of total' line)." }
+    DriftActionRequest:
+      type: object
+      required: [keep]
+      properties:
+        keep: { type: boolean, description: "Keep the item (pins it to the Desk); false lets it go." }
+    SearchResult:
+      type: object
+      required: [item, score]
+      properties:
+        item: { $ref: "#/components/schemas/Item" }
+        score: { type: number }
+    SearchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/SearchResult" }
+        understood:
+          $ref: "#/components/schemas/UnderstoodQuery"
+    UnderstoodQuery:
+      type: object
+      description: "How a natural-language query was interpreted (present only when parse=true). Reflects the values actually searched."
+      properties:
+        text: { type: string, description: "The free-text portion searched." }
+        color: { type: string, description: "The colour searched, if any." }
+        types:
+          type: array
+          description: "Card-type filters applied, if any."
+          items: { type: string, enum: [article, product, book, recipe, video, tweet, image, note, quote] }
+    LensRule:
+      type: object
+      description: "A saved search rule. At least one of q, color, or types must be set. Applied like /search: q is text (FTS + vector), color ranks by palette proximity, types narrows by card type."
+      properties:
+        q: { type: string, description: "Free-text query." }
+        color: { type: string, description: "Hex (#RRGGBB) or named colour (e.g. cobalt)." }
+        types:
+          type: array
+          description: "Card types to include."
+          items: { type: string, enum: [article, product, book, recipe, video, tweet, image, note, quote] }
+    Lens:
+      type: object
+      required: [id, name, rule, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        rule: { $ref: "#/components/schemas/LensRule" }
+        createdAt: { type: string, format: date-time }
+    CreateLensRequest:
+      type: object
+      required: [name, rule]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        rule: { $ref: "#/components/schemas/LensRule" }
+    Feed:
+      type: object
+      required: [id, url, title, siteUrl, lastStatus, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        title: { type: string }
+        siteUrl: { type: string }
+        lastPolledAt: { type: string, format: date-time, description: "Absent until the feed has been polled at least once." }
+        lastStatus: { type: string, description: "'ok' or 'error: …' from the most recent poll; empty before the first poll." }
+        createdAt: { type: string, format: date-time }
+    CreateFeedRequest:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, format: uri }
+    ApiKey:
+      type: object
+      required: [id, name, prefix, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        prefix: { type: string, description: "Non-secret display prefix (e.g. omk_AbCd1234)." }
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time, description: "Absent until the key has authenticated a request." }
+        revokedAt: { type: string, format: date-time, description: "Absent unless the key has been revoked." }
+    ApiKeyCreated:
+      type: object
+      required: [key, id, name, prefix, createdAt]
+      properties:
+        key: { type: string, description: "The full API key — shown exactly once." }
+        id: { type: string, format: uuid }
+        name: { type: string }
+        prefix: { type: string }
+        createdAt: { type: string, format: date-time }
+    CreateApiKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+    CreateDeviceLinkRequest:
+      type: object
+      properties:
+        deviceHint: { type: string, maxLength: 80 }
+    DeviceLinkCreated:
+      type: object
+      required: [code, expiresAt]
+      properties:
+        code: { type: string, description: "8-character code formatted as ABCD-EFGH." }
+        expiresAt: { type: string, format: date-time }
+    ClaimDeviceLinkRequest:
+      type: object
+      required: [code, deviceName]
+      properties:
+        code: { type: string }
+        deviceName: { type: string, minLength: 1, maxLength: 80 }
+    DeviceLinkClaimed:
+      type: object
+      required: [key, name]
+      properties:
+        key: { type: string, description: "The full API key — shown exactly once." }
+        name: { type: string }
+    ImportResult:
+      type: object
+      description: "Summary of a bulk import."
+      required: [total, imported, skipped, failed]
+      properties:
+        total: { type: integer, description: "Links found in the file." }
+        imported: { type: integer, description: "New items created (and queued for enrichment)." }
+        skipped: { type: integer, description: "Links skipped as already saved or duplicated within the file." }
+        failed: { type: integer, description: "Links rejected (not a valid http(s) URL) or that failed to save." }

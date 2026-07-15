@@ -1,0 +1,90 @@
+{
+  "expo": {
+    "name": "Openmind",
+    "slug": "openmind",
+    "scheme": "openmind",
+    "version": "0.2.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "fun.gilla.openmind",
+      "appleTeamId": "7D2V3RM56T",
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.fun.gilla.openmind"
+        ]
+      },
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "fun.gilla.openmind",
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-status-bar",
+      [
+        "expo-share-intent",
+        {
+          "androidIntentFilters": [
+            "text/*"
+          ],
+          "disableIOS": true,
+          "disableExperimental": true
+        }
+      ],
+      "expo-font",
+      "expo-splash-screen",
+      "@bacons/apple-targets"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "icon": "./assets/icon.png",
+    "splash": {
+      "backgroundColor": "#F4F0E6",
+      "resizeMode": "contain",
+      "image": "./assets/icon.png"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "787dda1f-ef57-4ef9-9a21-c213f656d09d",
+        "build": {
+          "experimental": {
+            "ios": {
+              "appExtensions": [
+                {
+                  "targetName": "OpenmindShare",
+                  "bundleIdentifier": "fun.gilla.openmind.share",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.fun.gilla.openmind"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "owner": "gilladude",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/787dda1f-ef57-4ef9-9a21-c213f656d09d"
+    }
+  }
+}
