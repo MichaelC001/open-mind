@@ -3,7 +3,7 @@
 import { tokens } from "@openmind/ui";
 import QRCode from "qrcode";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import type { ApiKey, ApiKeyCreated, DeviceLinkCreated } from "../lib/types";
+import type { ApiKey, ApiKeyCreated, DeviceLinkCreated, Settings } from "../lib/types";
 
 const { color, font } = tokens;
 
@@ -451,11 +451,115 @@ function ConnectDeviceSection() {
   );
 }
 
+function KindleSection() {
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings")
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+      .then((data: Settings) => {
+        if (cancelled) return;
+        setSettings(data);
+        setValue(data.kindleEmail ?? "");
+      })
+      .catch(() => {
+        if (!cancelled) setSettings({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const trimmed = value.trim();
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kindleEmail: trimmed }),
+      });
+      if (res.status === 400) {
+        setError("That doesn't look like a valid e-mail address.");
+        return;
+      }
+      if (!res.ok) throw new Error("save failed");
+      const data = (await res.json()) as Settings;
+      setSettings(data);
+      setValue(data.kindleEmail ?? "");
+      setSaved(true);
+    } catch {
+      setError("Couldn't save. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const configured = Boolean(settings?.kindleEmail);
+
+  return (
+    <div style={card}>
+      <div style={sectionTitle}>Send to Kindle</div>
+      <p
+        className="meta"
+        style={{ textTransform: "none", letterSpacing: ".02em", color: color.inkFaintAlt, margin: "6px 0 4px" }}
+      >
+        Items and Lens digests can be e-mailed to your Kindle as an EPUB.
+      </p>
+      {settings === null ? null : (
+        <p style={{ fontFamily: font.mono, fontSize: 12, color: color.inkFaintAlt, margin: "6px 0 16px" }}>
+          {configured ? `Current address: ${settings?.kindleEmail}` : "Not set"}
+        </p>
+      )}
+
+      <form onSubmit={handleSave} style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="you@kindle.com"
+          aria-label="Kindle e-mail address"
+          type="email"
+          style={inputStyle}
+        />
+        <button type="submit" className="savebtn" disabled={busy} style={{ opacity: busy ? 0.6 : 1 }}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </form>
+
+      {error ? (
+        <p role="alert" style={errorStyle}>
+          {error}
+        </p>
+      ) : saved ? (
+        <p style={{ fontFamily: font.mono, fontSize: 12, color: color.green, margin: "10px 0 0" }}>
+          Saved{configured ? "" : " — Kindle delivery is now off"}.
+        </p>
+      ) : null}
+
+      <p style={{ fontFamily: font.sans, fontSize: 12.5, color: color.inkFaintAlt, margin: "14px 0 0" }}>
+        In Amazon, go to <strong>Accounts &amp; Lists</strong> → <strong>Content &amp; Devices</strong> →{" "}
+        <strong>Preferences</strong> → <strong>Personal Document Settings</strong>. Approve the sender address under{" "}
+        <strong>Approved Personal Document E-mail List</strong>, then find your device&rsquo;s{" "}
+        <strong>@kindle.com</strong> address under <strong>Send-to-Kindle E-mail Settings</strong> and enter it above.
+      </p>
+    </div>
+  );
+}
+
 export function DevicesKeys() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24, maxWidth: 720 }}>
       <ConnectDeviceSection />
       <KeysSection />
+      <KindleSection />
     </div>
   );
 }

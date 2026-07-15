@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { tokens } from "@openmind/ui";
 import { useRef, useState } from "react";
 
@@ -51,17 +52,24 @@ export function KindleButton({ target, id }: { target: "item" | "lens"; id: stri
   const message: { text: string; color: string } | null =
     status === "sent"
       ? { text: "Sent ✓ — arrives on your Kindle shortly", color: color.green }
-      : status === "unconfigured"
-        ? { text: "Kindle isn't configured — see self-hosting docs", color: color.danger }
-        : status === "empty"
-          ? { text: "Nothing to send yet — no archived text", color: color.danger }
-          : status === "error"
-            ? { text: "Could not send. Please try again.", color: color.danger }
-            : null;
+      : status === "empty"
+        ? { text: "Nothing to send yet — no archived text", color: color.danger }
+        : status === "error"
+          ? { text: "Could not send. Please try again.", color: color.danger }
+          : null;
 
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-      {message ? (
+      {status === "unconfigured" ? (
+        <span aria-live="polite">
+          <Link
+            href="/settings/devices"
+            style={{ fontFamily: font.mono, fontSize: "0.72rem", color: color.danger, textDecoration: "none" }}
+          >
+            Set your Kindle address →
+          </Link>
+        </span>
+      ) : message ? (
         <span aria-live="polite">
           <span style={{ fontFamily: font.mono, fontSize: "0.72rem", color: message.color }}>
             {message.text}
