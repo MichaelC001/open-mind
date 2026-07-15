@@ -17,7 +17,13 @@ function textOffsetWithin(root: HTMLElement, node: Node, nodeOffset: number): nu
   function walk(n: Node) {
     if (found) return;
     if (n === node) {
-      offset += nodeOffset;
+      if (n.nodeType === Node.ELEMENT_NODE) {
+        for (let i = 0; i < nodeOffset; i++) {
+          offset += (n.childNodes[i]?.textContent ?? "").length;
+        }
+      } else {
+        offset += nodeOffset;
+      }
       found = true;
       return;
     }
@@ -115,19 +121,30 @@ export function HighlightableBody({ body, itemId }: { body: string; itemId: stri
   const [pending, setPending] = useState<PendingSelection | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoadFailed(false);
     fetch(`/api/items/${itemId}/highlights`)
-      .then((res) => (res.ok ? (res.json() as Promise<Highlight[]>) : []))
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`failed to load highlights: ${res.status}`);
+        }
+        return (await res.json()) as Highlight[];
+      })
       .then((data) => {
         if (!cancelled) setHighlights(data);
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("failed to load highlights", { itemId, err });
+        if (!cancelled) setLoadFailed(true);
+      });
     return () => {
       cancelled = true;
     };
-  }, [itemId]);
+  }, [itemId, loadAttempt]);
 
   const paragraphs = paragraphize(body);
 
@@ -201,7 +218,8 @@ export function HighlightableBody({ body, itemId }: { body: string; itemId: stri
       setHighlights((prev) => [...prev, data.highlight]);
       setPending(null);
       window.getSelection()?.removeAllRanges();
-    } catch {
+    } catch (err) {
+      console.error("highlight save failed", { itemId, err });
       setSaveFailed(true);
     } finally {
       setSaving(false);
@@ -210,6 +228,26 @@ export function HighlightableBody({ body, itemId }: { body: string; itemId: stri
 
   return (
     <div ref={containerRef} style={{ position: "relative" }} onMouseUp={handleMouseUp}>
+      {loadFailed ? (
+        <button
+          type="button"
+          onClick={() => setLoadAttempt((n) => n + 1)}
+          style={{
+            display: "block",
+            marginBottom: 12,
+            font: `500 11px/1 ${font.mono}`,
+            letterSpacing: ".02em",
+            color: color.terracotta,
+            background: color.noteSurface,
+            border: `1px solid ${color.terracotta}`,
+            borderRadius: 20,
+            padding: "6px 12px",
+            cursor: "pointer",
+          }}
+        >
+          Couldn&apos;t load highlights — retry
+        </button>
+      ) : null}
       {pending ? (
         <button
           type="button"

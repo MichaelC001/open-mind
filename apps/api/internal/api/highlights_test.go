@@ -102,7 +102,7 @@ func TestCreateHighlightValidation(t *testing.T) {
 		t.Errorf("2001-rune exact status = %d, want 400", resp3.StatusCode)
 	}
 
-	longPrefix := strings.Repeat("p", 200)
+	longPrefix := strings.Repeat("p", 136) + "ZZZ"
 	resp4 := postHighlight(t, srv.URL, id, `{"exact":"ok","prefix":"`+longPrefix+`"}`)
 	defer resp4.Body.Close()
 	if resp4.StatusCode != http.StatusCreated {
@@ -114,6 +114,112 @@ func TestCreateHighlightValidation(t *testing.T) {
 	}
 	if len([]rune(out.Highlight.Prefix)) != 64 {
 		t.Errorf("stored prefix rune length = %d, want 64 (truncated)", len([]rune(out.Highlight.Prefix)))
+	}
+	if !strings.HasSuffix(out.Highlight.Prefix, "ZZZ") {
+		t.Errorf("stored prefix = %q, want to keep the tail (end with ZZZ)", out.Highlight.Prefix)
+	}
+	longSuffix := "AAA" + strings.Repeat("s", 136)
+	resp5 := postHighlight(t, srv.URL, id, `{"exact":"ok2","suffix":"`+longSuffix+`"}`)
+	defer resp5.Body.Close()
+	if resp5.StatusCode != http.StatusCreated {
+		t.Fatalf("long suffix status = %d, want 201", resp5.StatusCode)
+	}
+	var out2 api.CreateHighlightResponse
+	if err := json.NewDecoder(resp5.Body).Decode(&out2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len([]rune(out2.Highlight.Suffix)) != 64 {
+		t.Errorf("stored suffix rune length = %d, want 64 (truncated)", len([]rune(out2.Highlight.Suffix)))
+	}
+	if !strings.HasPrefix(out2.Highlight.Suffix, "AAA") {
+		t.Errorf("stored suffix = %q, want to keep the head (start with AAA)", out2.Highlight.Suffix)
+	}
+
+	resp6 := postHighlight(t, srv.URL, id, `{"exact":"neg","offsetHint":-5}`)
+	defer resp6.Body.Close()
+	if resp6.StatusCode != http.StatusCreated {
+		t.Fatalf("negative offsetHint status = %d, want 201", resp6.StatusCode)
+	}
+	var out3 api.CreateHighlightResponse
+	if err := json.NewDecoder(resp6.Body).Decode(&out3); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var offsetHint int
+	if err := s.Pool.QueryRow(context.Background(),
+		`SELECT offset_hint FROM highlights WHERE id = $1`, out3.Highlight.Id).Scan(&offsetHint); err != nil {
+		t.Fatalf("querying highlight: %v", err)
+	}
+	if offsetHint != 0 {
+		t.Errorf("offset_hint = %d, want 0 (negative clamped)", offsetHint)
+	}
+}
+
+// TestCreateHighlightRollsBackOnLinkFailure proves CreateItemHighlight's tx is
+// truly atomic: if the third insert (the source<->quote link) fails, the
+// quote item and highlight row created earlier in the same transaction must
+// not survive. There's no clean way to force the link insert to fail through
+// the public HTTP surface (the handler always derives valid a/b item ids), so
+// this exercises the same three-insert sequence directly against the store,
+// using an invalid (non-existent) a_item to violate the links->items FK in
+// place of the handler's real CreateLink call. If someone "optimizes" the
+// handler to drop the transaction (e.g. runs the three inserts outside a tx,
+// or commits between them), the equivalent store-level sequence below would
+// leave the quote item and highlight behind after the forced failure — this
+// test would then fail to observe rollback and must be updated to assert
+// against the handler's new (non-transactional) behavior, which should be
+// treated as a regression, not a green light.
+func TestCreateHighlightRollsBackOnLinkFailure(t *testing.T) {
+	s, _, pool := testDeps(t)
+
+	article := seedEnriched(t, s, "an article", "body for rollback test", "article", nil)
+
+	ctx := context.Background()
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	rolledBack := false
+	defer func() {
+		if !rolledBack {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	q := s.Queries.WithTx(tx)
+
+	quote, err := q.CreateQuoteItem(ctx, db.CreateQuoteItemParams{UserID: api.DevUserID, Body: "rollback quote"})
+	if err != nil {
+		t.Fatalf("create quote item: %v", err)
+	}
+	hl, err := q.CreateHighlight(ctx, db.CreateHighlightParams{
+		UserID: api.DevUserID, SourceItemID: article.ID, QuoteItemID: quote.ID, Exact: "rollback quote",
+	})
+	if err != nil {
+		t.Fatalf("create highlight: %v", err)
+	}
+
+	invalidItem := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	_, linkErr := q.CreateLink(ctx, db.CreateLinkParams{UserID: api.DevUserID, AItem: invalidItem, BItem: quote.ID})
+	if linkErr == nil {
+		t.Fatal("expected CreateLink with a non-existent a_item to fail the links->items FK")
+	}
+
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	rolledBack = true
+
+	var quoteCount, hlCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM items WHERE id = $1`, quote.ID).Scan(&quoteCount); err != nil {
+		t.Fatalf("counting quote item: %v", err)
+	}
+	if quoteCount != 0 {
+		t.Errorf("quote item count after rollback = %d, want 0 (transaction must be atomic)", quoteCount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM highlights WHERE id = $1`, hl.ID).Scan(&hlCount); err != nil {
+		t.Fatalf("counting highlight: %v", err)
+	}
+	if hlCount != 0 {
+		t.Errorf("highlight count after rollback = %d, want 0 (transaction must be atomic)", hlCount)
 	}
 }
 
