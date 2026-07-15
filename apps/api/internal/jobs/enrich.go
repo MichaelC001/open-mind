@@ -4,6 +4,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -34,21 +35,37 @@ func (w *EnrichWorker) Work(ctx context.Context, job *river.Job[EnrichArgs]) err
 	return w.Pipeline.Run(ctx, job.Args.UserID, job.Args.ItemID)
 }
 
+// digestScanInterval is how often the periodic scan_digests job runs. It is
+// hourly rather than matching the coarsest schedule (weekly) so a daily
+// digest lens is checked often enough that digestDue's 20h threshold is
+// meaningful.
+const digestScanInterval = time.Hour
+
 // NewRiverClient builds a River client over the given pool. When workersOn is
-// true it registers the enrichment, feed-poll, and send-kindle workers, a
-// default queue, and the periodic feed-poll job; otherwise it returns an
-// insert-only client (for the API process), which enqueues jobs but runs
-// none. feedService is only used when workersOn (the poll worker + periodic
-// job); the insert-only path ignores it and may be passed nil. kindleDeps is
-// likewise only exercised by the worker process; the insert-only path still
-// accepts it (unused) so callers don't need two signatures.
+// true it registers the enrichment, feed-poll, send-kindle, and scan-digests
+// workers, a default queue, and the periodic feed-poll and scan-digests jobs;
+// otherwise it returns an insert-only client (for the API process), which
+// enqueues jobs but runs none. feedService is only used when workersOn (the
+// poll worker + periodic job); the insert-only path ignores it and may be
+// passed nil. kindleDeps is likewise only exercised by the worker process;
+// the insert-only path still accepts it (unused) so callers don't need two
+// signatures.
 func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefresher, kindleDeps KindleDeps, workersOn bool) (*river.Client[pgx.Tx], error) {
 	cfg := &river.Config{}
+	// scanWorker is registered before the client exists (AddWorker needs a
+	// worker instance up front), but its River field — used to enqueue
+	// send_kindle jobs — can only be set once the client is built. Since
+	// AddWorker takes a pointer and River only reads scanWorker.River inside
+	// Work (called later, after NewRiverClient returns), setting the field
+	// after construction is safe.
+	var scanWorker *ScanDigestsWorker
 	if workersOn {
 		workers := river.NewWorkers()
+		scanWorker = &ScanDigestsWorker{Store: p.Store, Provider: p.AI}
 		river.AddWorker(workers, &EnrichWorker{Pipeline: p})
 		river.AddWorker(workers, &PollFeedsWorker{Service: feedService})
 		river.AddWorker(workers, &SendKindleWorker{Store: p.Store, Provider: p.AI, Deps: kindleDeps})
+		river.AddWorker(workers, scanWorker)
 		cfg.Workers = workers
 		cfg.Queues = map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 5}}
 		cfg.PeriodicJobs = []*river.PeriodicJob{
@@ -57,11 +74,19 @@ func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefr
 				func() (river.JobArgs, *river.InsertOpts) { return PollFeedsArgs{}, nil },
 				&river.PeriodicJobOpts{RunOnStart: true},
 			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(digestScanInterval),
+				func() (river.JobArgs, *river.InsertOpts) { return ScanDigestsArgs{}, nil },
+				&river.PeriodicJobOpts{RunOnStart: true},
+			),
 		}
 	}
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating river client: %w", err)
+	}
+	if workersOn {
+		scanWorker.River = client
 	}
 	return client, nil
 }

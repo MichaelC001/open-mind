@@ -25,6 +25,11 @@ import (
 // digest EPUB, so a broad rule never produces an unreasonably large book.
 const kindleDigestCap = 25
 
+// kindleSettingKey is the user_settings key holding a reader's personal
+// Kindle e-mail address. It mirrors internal/api's unexported constant of
+// the same name (kept separate to avoid an import cycle).
+const kindleSettingKey = "kindle_email"
+
 // KindleDeps carries what the send_kindle worker needs to actually deliver a
 // message: a configured Mailer and the destination address. Configured
 // mirrors whether SMTP_HOST, SMTP_FROM and KINDLE_EMAIL were all set at
@@ -41,10 +46,15 @@ type KindleDeps struct {
 // SendKindleArgs is the River job payload for e-mailing an item or a Lens
 // digest to Kindle. Exactly one of ItemID or LensID must be set; the worker
 // fetches fresh state inside the job rather than trusting a stale snapshot.
+// ItemIDs is optional and only meaningful alongside LensID: when set (as the
+// scan_digests worker does), the digest is built from exactly those items
+// instead of re-running the Lens's rule, so a digest only ever contains what
+// was new at scan time even if the rule's result set has since changed.
 type SendKindleArgs struct {
-	UserID uuid.UUID  `json:"user_id"`
-	ItemID *uuid.UUID `json:"item_id,omitempty"`
-	LensID *uuid.UUID `json:"lens_id,omitempty"`
+	UserID  uuid.UUID   `json:"user_id"`
+	ItemID  *uuid.UUID  `json:"item_id,omitempty"`
+	LensID  *uuid.UUID  `json:"lens_id,omitempty"`
+	ItemIDs []uuid.UUID `json:"item_ids,omitempty"`
 }
 
 // Kind identifies the job type in River.
@@ -80,7 +90,27 @@ func (w *SendKindleWorker) Work(ctx context.Context, job *river.Job[SendKindleAr
 	if args.ItemID != nil {
 		return w.sendItem(ctx, args.UserID, *args.ItemID)
 	}
+	if len(args.ItemIDs) > 0 {
+		return w.sendItemIDsDigest(ctx, args.UserID, *args.LensID, args.ItemIDs)
+	}
 	return w.sendLensDigest(ctx, args.UserID, *args.LensID)
+}
+
+// recipient resolves the destination Kindle address for uid: the user's own
+// kindle_email setting takes priority, falling back to the server-wide
+// Deps.To. If neither is set, it returns an error so River retries — this
+// mirrors send_kindle's other not-yet-configured cases rather than silently
+// dropping the send.
+func (w *SendKindleWorker) recipient(ctx context.Context, uid uuid.UUID) (string, error) {
+	if to, err := w.Store.Queries.GetUserSetting(ctx, db.GetUserSettingParams{UserID: uid, Key: kindleSettingKey}); err == nil && to != "" {
+		return to, nil
+	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("send_kindle: fetching kindle_email setting: %w", err)
+	}
+	if w.Deps.To != "" {
+		return w.Deps.To, nil
+	}
+	return "", fmt.Errorf("send_kindle: no kindle address configured for user %s", uid)
 }
 
 func (w *SendKindleWorker) sendItem(ctx context.Context, uid, itemID uuid.UUID) error {
@@ -109,7 +139,7 @@ func (w *SendKindleWorker) sendItem(ctx context.Context, uid, itemID uuid.UUID) 
 		Author:   "Openmind",
 		Chapters: []epub.Chapter{{Title: title, Body: item.Body}},
 	}
-	return w.send(ctx, doc, fmt.Sprintf("openmind-%s.epub", shortID(item.ID)))
+	return w.send(ctx, uid, doc, fmt.Sprintf("openmind-%s.epub", shortID(item.ID)))
 }
 
 func (w *SendKindleWorker) sendLensDigest(ctx context.Context, uid, lensID uuid.UUID) error {
@@ -122,35 +152,21 @@ func (w *SendKindleWorker) sendLensDigest(ctx context.Context, uid, lensID uuid.
 		return fmt.Errorf("send_kindle: fetching lens: %w", err)
 	}
 
-	var rule kindleLensRule
-	if len(lens.Rule) > 0 {
-		if err := json.Unmarshal(lens.Rule, &rule); err != nil {
-			return fmt.Errorf("send_kindle: decoding lens rule: %w", err)
-		}
-	}
-	var q, color string
-	if rule.Q != nil {
-		q = *rule.Q
-	}
-	if rule.Color != nil {
-		color = *rule.Color
-	}
-
-	results, err := search.RunLensRule(ctx, w.Store, w.Provider, uid, q, color, rule.Types)
-	if err != nil && !errors.Is(err, search.ErrBadColor) {
-		return fmt.Errorf("send_kindle: running lens rule: %w", err)
+	items, err := lensItems(ctx, w.Store, w.Provider, uid, lens)
+	if err != nil {
+		return fmt.Errorf("send_kindle: %w", err)
 	}
 
 	chapters := make([]epub.Chapter, 0, kindleDigestCap)
-	for _, res := range results {
-		if res.Item.Body == "" {
+	for _, item := range items {
+		if item.Body == "" {
 			continue
 		}
-		title := res.Item.Title
+		title := item.Title
 		if title == "" {
-			title = res.Item.Url
+			title = item.Url
 		}
-		chapters = append(chapters, epub.Chapter{Title: title, Body: res.Item.Body})
+		chapters = append(chapters, epub.Chapter{Title: title, Body: item.Body})
 		if len(chapters) >= kindleDigestCap {
 			break
 		}
@@ -162,7 +178,50 @@ func (w *SendKindleWorker) sendLensDigest(ctx context.Context, uid, lensID uuid.
 
 	title := fmt.Sprintf("Openmind digest — %s — %s", lens.Name, time.Now().Format("2006-01-02"))
 	doc := epub.Document{Title: title, Author: "Openmind", Chapters: chapters}
-	return w.send(ctx, doc, fmt.Sprintf("openmind-%s.epub", shortID(lens.ID)))
+	return w.send(ctx, uid, doc, fmt.Sprintf("openmind-%s.epub", shortID(lens.ID)))
+}
+
+// sendItemIDsDigest builds a Lens digest from exactly the given item IDs
+// (the scan_digests job's "new items since last digest" set) rather than
+// re-running the Lens's rule. Missing items (deleted since the scan) are
+// skipped; a body-less item is skipped the same way a rule-derived one is.
+func (w *SendKindleWorker) sendItemIDsDigest(ctx context.Context, uid, lensID uuid.UUID, itemIDs []uuid.UUID) error {
+	lens, err := w.Store.Queries.GetLens(ctx, db.GetLensParams{UserID: uid, ID: lensID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("send_kindle: lens no longer exists; skipping", "lens_id", lensID)
+			return nil
+		}
+		return fmt.Errorf("send_kindle: fetching lens: %w", err)
+	}
+
+	chapters := make([]epub.Chapter, 0, len(itemIDs))
+	for _, itemID := range itemIDs {
+		item, err := w.Store.Queries.GetItem(ctx, db.GetItemParams{UserID: uid, ID: itemID})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				slog.Warn("send_kindle: digest item no longer exists; skipping", "item_id", itemID)
+				continue
+			}
+			return fmt.Errorf("send_kindle: fetching digest item: %w", err)
+		}
+		if item.Body == "" {
+			continue
+		}
+		title := item.Title
+		if title == "" {
+			title = item.Url
+		}
+		chapters = append(chapters, epub.Chapter{Title: title, Body: item.Body})
+	}
+	if len(chapters) == 0 {
+		slog.Warn("send_kindle: digest item set has no items with bodies; nothing to send", "lens_id", lensID)
+		return nil
+	}
+
+	title := fmt.Sprintf("Openmind digest — %s — %s", lens.Name, time.Now().Format("2006-01-02"))
+	doc := epub.Document{Title: title, Author: "Openmind", Chapters: chapters}
+	return w.send(ctx, uid, doc, fmt.Sprintf("openmind-%s.epub", shortID(lens.ID)))
 }
 
 // kindleLensRule decodes the subset of a stored LensRule this worker needs
@@ -175,14 +234,48 @@ type kindleLensRule struct {
 	Types []string `json:"types"`
 }
 
-// send builds doc into an EPUB in memory and e-mails it as an attachment.
-func (w *SendKindleWorker) send(ctx context.Context, doc epub.Document, filename string) error {
+// lensItems runs lens's stored rule and returns the matching items. It is
+// shared by the full-rule digest path (sendLensDigest) and the digest-scan
+// job (ScanDigestsWorker), so both agree on exactly what a Lens matches.
+func lensItems(ctx context.Context, s *store.Store, p ai.Provider, uid uuid.UUID, lens db.Lense) ([]db.Item, error) {
+	var rule kindleLensRule
+	if len(lens.Rule) > 0 {
+		if err := json.Unmarshal(lens.Rule, &rule); err != nil {
+			return nil, fmt.Errorf("decoding lens rule: %w", err)
+		}
+	}
+	var q, color string
+	if rule.Q != nil {
+		q = *rule.Q
+	}
+	if rule.Color != nil {
+		color = *rule.Color
+	}
+
+	results, err := search.RunLensRule(ctx, s, p, uid, q, color, rule.Types)
+	if err != nil && !errors.Is(err, search.ErrBadColor) {
+		return nil, fmt.Errorf("running lens rule: %w", err)
+	}
+	items := make([]db.Item, 0, len(results))
+	for _, res := range results {
+		items = append(items, res.Item)
+	}
+	return items, nil
+}
+
+// send builds doc into an EPUB in memory and e-mails it as an attachment to
+// uid's resolved Kindle address.
+func (w *SendKindleWorker) send(ctx context.Context, uid uuid.UUID, doc epub.Document, filename string) error {
+	to, err := w.recipient(ctx, uid)
+	if err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	if err := epub.Build(&buf, doc); err != nil {
 		return fmt.Errorf("send_kindle: building epub: %w", err)
 	}
 	msg := mailer.Message{
-		To:       w.Deps.To,
+		To:       to,
 		Subject:  doc.Title,
 		BodyText: fmt.Sprintf("%s is attached as an EPUB.", doc.Title),
 		Attachment: &mailer.Attachment{
