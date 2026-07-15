@@ -61,7 +61,7 @@ func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefr
 	var scanWorker *ScanDigestsWorker
 	if workersOn {
 		workers := river.NewWorkers()
-		scanWorker = &ScanDigestsWorker{Store: p.Store, Provider: p.AI}
+		scanWorker = &ScanDigestsWorker{Store: p.Store, Provider: p.AI, Deps: kindleDeps}
 		river.AddWorker(workers, &EnrichWorker{Pipeline: p})
 		river.AddWorker(workers, &PollFeedsWorker{Service: feedService})
 		river.AddWorker(workers, &SendKindleWorker{Store: p.Store, Provider: p.AI, Deps: kindleDeps})

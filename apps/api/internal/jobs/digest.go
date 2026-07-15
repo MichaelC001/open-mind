@@ -27,6 +27,11 @@ import (
 // digests (an item created in the hour before a stamp may appear twice).
 const digestGrace = time.Hour
 
+// kindleMaxAttempts caps River retries for send_kindle jobs enqueued from the
+// scan. It mirrors internal/api's unexported constant of the same name (kept
+// separate to avoid an import cycle).
+const kindleMaxAttempts = 5
+
 // ScanDigestsArgs is the River job payload for the periodic digest scan. It
 // carries no state: the worker lists every Lens with a non-empty
 // digest_schedule itself and decides per-lens whether it is due.
@@ -43,6 +48,7 @@ type ScanDigestsWorker struct {
 	Store    *store.Store
 	Provider ai.Provider
 	River    *river.Client[pgx.Tx]
+	Deps     KindleDeps
 }
 
 // Work lists every scheduled Lens and processes the ones that are due. A
@@ -56,11 +62,12 @@ func (w *ScanDigestsWorker) Work(ctx context.Context, _ *river.Job[ScanDigestsAr
 	}
 
 	now := time.Now()
+	warnedUnconfigured := false
 	for _, lens := range lenses {
 		if !digestDue(lens.DigestSchedule, lens.LastDigestAt, now) {
 			continue
 		}
-		if err := w.processLens(ctx, lens); err != nil {
+		if err := w.processLens(ctx, lens, &warnedUnconfigured); err != nil {
 			slog.Error("scan_digests: processing lens", "lens_id", lens.ID, "err", err)
 			continue
 		}
@@ -74,7 +81,28 @@ func (w *ScanDigestsWorker) Work(ctx context.Context, _ *river.Job[ScanDigestsAr
 // An empty result set is not an error: it just means nothing new to send, and
 // the stamp is deliberately left untouched so a lens that stays quiet doesn't
 // drift its schedule.
-func (w *ScanDigestsWorker) processLens(ctx context.Context, lens db.Lense) error {
+//
+// Delivery must be possible before a digest is stamped: if the SMTP
+// transport isn't configured, or the lens's user has no resolvable
+// recipient (no kindle_email setting and no server-wide fallback), the lens
+// is skipped without stamping last_digest_at — otherwise this window's items
+// would be permanently excluded from every future digest even though nothing
+// was ever sent. warnedUnconfigured suppresses repeat "unconfigured" log
+// lines within a single scan (one warning per run, not one per lens).
+func (w *ScanDigestsWorker) processLens(ctx context.Context, lens db.Lense, warnedUnconfigured *bool) error {
+	if !w.Deps.Configured {
+		if !*warnedUnconfigured {
+			slog.Warn("scan_digests: kindle transport not configured, skipping due lenses")
+			*warnedUnconfigured = true
+		}
+		return nil
+	}
+
+	if _, err := resolveKindleRecipient(ctx, w.Store, lens.UserID, w.Deps.To); err != nil {
+		slog.Warn("scan_digests: no deliverable recipient, skipping lens", "lens_id", lens.ID, "user_id", lens.UserID)
+		return nil
+	}
+
 	items, err := lensItems(ctx, w.Store, w.Provider, lens.UserID, lens)
 	if err != nil {
 		return fmt.Errorf("running lens rule: %w", err)
@@ -108,7 +136,7 @@ func (w *ScanDigestsWorker) processLens(ctx context.Context, lens db.Lense) erro
 	defer tx.Rollback(ctx)
 
 	lensID := lens.ID
-	if _, err := w.River.InsertTx(ctx, tx, SendKindleArgs{UserID: lens.UserID, LensID: &lensID, ItemIDs: ids}, nil); err != nil {
+	if _, err := w.River.InsertTx(ctx, tx, SendKindleArgs{UserID: lens.UserID, LensID: &lensID, ItemIDs: ids}, &river.InsertOpts{MaxAttempts: kindleMaxAttempts}); err != nil {
 		return fmt.Errorf("enqueueing send_kindle: %w", err)
 	}
 	if _, err := w.Store.Queries.WithTx(tx).StampLensDigest(ctx, db.StampLensDigestParams{UserID: lens.UserID, ID: lens.ID}); err != nil {

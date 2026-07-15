@@ -176,15 +176,29 @@ func (w *SendKindleWorker) Work(ctx context.Context, job *river.Job[SendKindleAr
 // mirrors send_kindle's other not-yet-configured cases rather than silently
 // dropping the send.
 func (w *SendKindleWorker) recipient(ctx context.Context, uid uuid.UUID) (string, error) {
-	if to, err := w.Store.Queries.GetUserSetting(ctx, db.GetUserSettingParams{UserID: uid, Key: kindleSettingKey}); err == nil && to != "" {
+	to, err := resolveKindleRecipient(ctx, w.Store, uid, w.Deps.To)
+	if err != nil {
+		return "", fmt.Errorf("send_kindle: %w", err)
+	}
+	return to, nil
+}
+
+// resolveKindleRecipient resolves the destination Kindle address for uid: the
+// user's own kindle_email setting takes priority, falling back to fallback
+// (a server-wide address, typically Deps.To). If neither is set, it returns
+// an error. Shared by SendKindleWorker (where an error triggers a River
+// retry) and ScanDigestsWorker (where an error means the lens is skipped
+// without stamping) so recipient resolution can never drift between the two.
+func resolveKindleRecipient(ctx context.Context, s *store.Store, uid uuid.UUID, fallback string) (string, error) {
+	if to, err := s.Queries.GetUserSetting(ctx, db.GetUserSettingParams{UserID: uid, Key: kindleSettingKey}); err == nil && to != "" {
 		return to, nil
 	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("send_kindle: fetching kindle_email setting: %w", err)
+		return "", fmt.Errorf("fetching kindle_email setting: %w", err)
 	}
-	if w.Deps.To != "" {
-		return w.Deps.To, nil
+	if fallback != "" {
+		return fallback, nil
 	}
-	return "", fmt.Errorf("send_kindle: no kindle address configured for user %s", uid)
+	return "", fmt.Errorf("no kindle address configured for user %s", uid)
 }
 
 func (w *SendKindleWorker) sendItem(ctx context.Context, uid, itemID uuid.UUID) error {

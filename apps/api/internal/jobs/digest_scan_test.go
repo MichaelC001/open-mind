@@ -115,9 +115,21 @@ func createDigestLens(t *testing.T, s *store.Store, name, schedule string) db.Le
 	return lens
 }
 
+// digestScanDeps is the KindleDeps used by runDigestScan's default,
+// deliverable configuration: a configured transport with a server-wide
+// fallback recipient, so existing tests that don't care about delivery keep
+// passing unchanged. Tests exercising the delivery gate call
+// runDigestScanWithDeps directly with a different KindleDeps.
+var digestScanDeps = jobs.KindleDeps{To: "fallback@kindle.com", Configured: true}
+
 func runDigestScan(t *testing.T, s *store.Store, rc *river.Client[pgx.Tx]) {
 	t.Helper()
-	w := &jobs.ScanDigestsWorker{Store: s, Provider: ai.NewNoop(), River: rc}
+	runDigestScanWithDeps(t, s, rc, digestScanDeps)
+}
+
+func runDigestScanWithDeps(t *testing.T, s *store.Store, rc *river.Client[pgx.Tx], deps jobs.KindleDeps) {
+	t.Helper()
+	w := &jobs.ScanDigestsWorker{Store: s, Provider: ai.NewNoop(), River: rc, Deps: deps}
 	if err := w.Work(context.Background(), &river.Job[jobs.ScanDigestsArgs]{Args: jobs.ScanDigestsArgs{}}); err != nil {
 		t.Fatalf("Work: %v", err)
 	}
@@ -207,5 +219,85 @@ func TestScanDigestsIdempotentWithinHour(t *testing.T) {
 
 	if found := listSendKindleJobs(t, s); len(found) != 1 {
 		t.Fatalf("send_kindle jobs = %d, want 1 (second run sees nothing new)", len(found))
+	}
+}
+
+// TestScanDigestsSkipsWhenTransportUnconfigured asserts that a due lens with
+// matching items is skipped entirely (no send_kindle job, no stamp) when
+// KindleDeps.Configured is false — the transport being down must never
+// permanently exclude that window's items from a future digest.
+func TestScanDigestsSkipsWhenTransportUnconfigured(t *testing.T) {
+	s, rc := newDigestScanTestStore(t)
+	ctx := context.Background()
+
+	newDigestScanItem(t, s, "one", "content")
+	lens := createDigestLens(t, s, "Notes", "daily")
+
+	runDigestScanWithDeps(t, s, rc, jobs.KindleDeps{Configured: false})
+
+	if found := listSendKindleJobs(t, s); len(found) != 0 {
+		t.Fatalf("send_kindle jobs = %d, want 0 (transport unconfigured)", len(found))
+	}
+	updated, err := s.Queries.GetLens(ctx, db.GetLensParams{UserID: digestScanTestUser, ID: lens.ID})
+	if err != nil {
+		t.Fatalf("reload lens: %v", err)
+	}
+	if updated.LastDigestAt.Valid {
+		t.Errorf("last_digest_at = %+v, want unset (never stamped when transport unconfigured)", updated.LastDigestAt)
+	}
+}
+
+// TestScanDigestsSkipsWhenNoRecipient asserts that a due lens with matching
+// items is skipped (no send_kindle job, no stamp) when the transport is
+// configured but the lens's user has no resolvable recipient — neither a
+// kindle_email user setting nor a server-wide fallback (Deps.To).
+func TestScanDigestsSkipsWhenNoRecipient(t *testing.T) {
+	s, rc := newDigestScanTestStore(t)
+	ctx := context.Background()
+
+	newDigestScanItem(t, s, "one", "content")
+	lens := createDigestLens(t, s, "Notes", "daily")
+
+	runDigestScanWithDeps(t, s, rc, jobs.KindleDeps{Configured: true})
+
+	if found := listSendKindleJobs(t, s); len(found) != 0 {
+		t.Fatalf("send_kindle jobs = %d, want 0 (no deliverable recipient)", len(found))
+	}
+	updated, err := s.Queries.GetLens(ctx, db.GetLensParams{UserID: digestScanTestUser, ID: lens.ID})
+	if err != nil {
+		t.Fatalf("reload lens: %v", err)
+	}
+	if updated.LastDigestAt.Valid {
+		t.Errorf("last_digest_at = %+v, want unset (never stamped without a recipient)", updated.LastDigestAt)
+	}
+}
+
+// TestScanDigestsProceedsWithUserKindleEmail asserts that a due lens for a
+// user with a kindle_email setting proceeds to enqueue+stamp even with no
+// server-wide fallback configured — the per-user setting alone is enough to
+// make the lens deliverable.
+func TestScanDigestsProceedsWithUserKindleEmail(t *testing.T) {
+	s, rc := newDigestScanTestStore(t)
+	ctx := context.Background()
+
+	newDigestScanItem(t, s, "one", "content")
+	lens := createDigestLens(t, s, "Notes", "daily")
+	if err := s.Queries.UpsertUserSetting(ctx, db.UpsertUserSettingParams{
+		UserID: digestScanTestUser, Key: "kindle_email", Value: "personal@kindle.com",
+	}); err != nil {
+		t.Fatalf("set kindle_email: %v", err)
+	}
+
+	runDigestScanWithDeps(t, s, rc, jobs.KindleDeps{Configured: true})
+
+	if found := listSendKindleJobs(t, s); len(found) != 1 {
+		t.Fatalf("send_kindle jobs = %d, want 1", len(found))
+	}
+	updated, err := s.Queries.GetLens(ctx, db.GetLensParams{UserID: digestScanTestUser, ID: lens.ID})
+	if err != nil {
+		t.Fatalf("reload lens: %v", err)
+	}
+	if !updated.LastDigestAt.Valid {
+		t.Errorf("last_digest_at not stamped, want stamped after successful enqueue")
 	}
 }
