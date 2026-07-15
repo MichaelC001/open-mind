@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { tokens } from "@openmind/ui";
 import { checkToken, claimDeviceCode } from "../lib/api";
+import { captureToAccelerator, DEFAULT_QUICK_SAVE, DEFAULT_QUICK_FIND } from "../lib/accelerator";
 import { clearSettings, setSettings, type Settings } from "../lib/settings";
 import { DragRegion } from "../components/DragRegion";
+
+/** Rust's `ShortcutPair`/`rebind_shortcuts` use snake_case field names — no
+ * serde rename_all is applied, so the wire shape matches Rust exactly. */
+type ShortcutPair = { quick_save: string; quick_find: string };
+
+type RecorderField = "quickSave" | "quickFind";
 
 type Status =
   | { kind: "idle" }
@@ -43,8 +51,79 @@ export function SettingsView({
   const [launchError, setLaunchError] = useState<string | null>(null);
   const launchTouchedRef = useRef(false);
 
+  const [quickSave, setQuickSave] = useState(DEFAULT_QUICK_SAVE);
+  const [quickFind, setQuickFind] = useState(DEFAULT_QUICK_FIND);
+  const [recording, setRecording] = useState<RecorderField | null>(null);
+  const [recordInvalid, setRecordInvalid] = useState(false);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [shortcutSaving, setShortcutSaving] = useState(false);
+
   const checking = status.kind === "checking";
   const claiming = claimStatus.kind === "claiming";
+
+  async function loadShortcuts() {
+    try {
+      const pair = await invoke<ShortcutPair>("get_shortcuts");
+      setQuickSave(pair.quick_save);
+      setQuickFind(pair.quick_find);
+    } catch {
+      // Non-Tauri contexts (tests) or a boot glitch — keep the defaults shown.
+    }
+  }
+
+  useEffect(() => {
+    void loadShortcuts();
+  }, []);
+
+  function onRecorderFocus(field: RecorderField) {
+    setRecording(field);
+    setRecordInvalid(false);
+    setShortcutError(null);
+  }
+
+  function onRecorderKeyDown(field: RecorderField, e: ReactKeyboardEvent<HTMLInputElement>) {
+    e.preventDefault();
+    if (e.key === "Escape") {
+      setRecording(null);
+      setRecordInvalid(false);
+      return;
+    }
+    const accelerator = captureToAccelerator({
+      key: e.key,
+      code: e.code,
+      metaKey: e.metaKey,
+      ctrlKey: e.ctrlKey,
+      altKey: e.altKey,
+      shiftKey: e.shiftKey,
+    });
+    if (accelerator === null) {
+      setRecordInvalid(true);
+      return;
+    }
+    if (field === "quickSave") setQuickSave(accelerator);
+    else setQuickFind(accelerator);
+    setRecordInvalid(false);
+    setRecording(null);
+  }
+
+  async function saveShortcuts(save: string, find: string) {
+    setShortcutSaving(true);
+    setShortcutError(null);
+    try {
+      await invoke("rebind_shortcuts", { quickSave: save, quickFind: find });
+    } catch (err) {
+      setShortcutError(typeof err === "string" ? err : "Couldn't set that shortcut — try again.");
+      await loadShortcuts();
+    } finally {
+      setShortcutSaving(false);
+    }
+  }
+
+  function onResetShortcuts() {
+    setQuickSave(DEFAULT_QUICK_SAVE);
+    setQuickFind(DEFAULT_QUICK_FIND);
+    void saveShortcuts(DEFAULT_QUICK_SAVE, DEFAULT_QUICK_FIND);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -172,7 +251,7 @@ export function SettingsView({
     onSignedOut?.();
   }
 
-  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+  function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
     if (e.key === "Escape") {
       e.preventDefault();
       if (onCancel) {
@@ -304,6 +383,62 @@ export function SettingsView({
           </button>
         </div>
         {launchError ? <p style={{ ...styles.status, color: tokens.color.danger }}>{launchError}</p> : null}
+
+        <h2 style={{ ...styles.sectionHeading, marginTop: 22, paddingTop: 14, borderTop: `1px solid ${tokens.color.hairline}` }}>
+          Shortcuts
+        </h2>
+        <p style={styles.sectionHint}>Click a field, then press a combination to rebind it.</p>
+
+        <label style={styles.field}>
+          <span style={styles.label}>Quick save</span>
+          <input
+            style={styles.input}
+            value={recording === "quickSave" ? "" : quickSave}
+            placeholder={recording === "quickSave" ? "Press a combination…" : undefined}
+            onFocus={() => onRecorderFocus("quickSave")}
+            onKeyDown={(e) => onRecorderKeyDown("quickSave", e)}
+            readOnly
+          />
+          {recording === "quickSave" && recordInvalid ? (
+            <span style={styles.shortcutHint}>Needs a modifier key (⌘, Ctrl, Alt, or Shift).</span>
+          ) : null}
+        </label>
+
+        <label style={styles.field}>
+          <span style={styles.label}>Quick find</span>
+          <input
+            style={styles.input}
+            value={recording === "quickFind" ? "" : quickFind}
+            placeholder={recording === "quickFind" ? "Press a combination…" : undefined}
+            onFocus={() => onRecorderFocus("quickFind")}
+            onKeyDown={(e) => onRecorderKeyDown("quickFind", e)}
+            readOnly
+          />
+          {recording === "quickFind" && recordInvalid ? (
+            <span style={styles.shortcutHint}>Needs a modifier key (⌘, Ctrl, Alt, or Shift).</span>
+          ) : null}
+        </label>
+
+        {shortcutError ? <p style={{ ...styles.status, color: tokens.color.danger }}>{shortcutError}</p> : null}
+
+        <div style={styles.shortcutActions}>
+          <button
+            type="button"
+            style={{ ...styles.outlineButton, ...(shortcutSaving ? styles.disabled : {}) }}
+            onClick={() => void saveShortcuts(quickSave, quickFind)}
+            disabled={shortcutSaving}
+          >
+            {shortcutSaving ? "Saving…" : "Save shortcuts"}
+          </button>
+          <button
+            type="button"
+            style={styles.linkButton}
+            onClick={onResetShortcuts}
+            disabled={shortcutSaving}
+          >
+            Reset to defaults
+          </button>
+        </div>
 
         {initial ? (
           <button type="button" style={styles.signOutButton} onClick={() => void onSignOut()}>
@@ -529,5 +664,24 @@ const styles: Record<string, CSSProperties> = {
   disabled: {
     opacity: 0.65,
     cursor: "default",
+  },
+  shortcutHint: {
+    fontSize: 12,
+    color: tokens.color.gold,
+  },
+  shortcutActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: 14,
+    marginTop: 2,
+  },
+  linkButton: {
+    border: "none",
+    background: "none",
+    color: tokens.color.inkMuted,
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    padding: 0,
   },
 };

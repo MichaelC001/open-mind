@@ -268,6 +268,24 @@ async function listItemsFrom(
   }
 }
 
+/**
+ * Set an item's user tags via PATCH {instanceUrl}/api/items/{id}. Throws on
+ * a missing instance/token or a non-2xx response — callers surface the
+ * failure inline (e.g. the confirm strip keeps the tag input on error).
+ */
+export async function setUserTags(itemId: string, tags: string[], override?: Settings): Promise<void> {
+  const settings = await resolveSettings(override);
+  if (!settings) throw new Error("No settings configured");
+  const res = await timedFetch(apiUrl(settings.instanceUrl, `/api/items/${itemId}`), {
+    method: "PATCH",
+    headers: authHeaders(settings.token, true),
+    body: JSON.stringify({ userTags: tags }),
+  });
+  if (!res.ok) {
+    throw new Error(`Request failed (${res.status})`);
+  }
+}
+
 /** Desk pins via GET {instanceUrl}/api/desk (newest-pinned first). */
 export function listDesk(
   override?: Settings,

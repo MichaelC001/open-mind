@@ -6,10 +6,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { tokens } from "@openmind/ui";
 import { PanelDragStrip } from "../components/DragRegion";
 import { IconButton, SettingsIcon } from "../components/SettingsIcon";
-import { saveItem, searchItems, listDesk, listRecent, type Item, type SearchResult } from "../lib/api";
+import { saveItem, searchItems, setUserTags, listDesk, listRecent, type Item, type SearchResult } from "../lib/api";
 import { mergeHomeLists } from "../lib/home-lists";
 import { detectMode } from "../lib/input-mode";
 import { getSettings, type Settings } from "../lib/settings";
+import { confirmReduce, parseTags, type ConfirmState } from "../lib/save-confirm";
 import { SettingsView } from "./SettingsView";
 
 type ViewMode = "settings" | "main";
@@ -18,6 +19,8 @@ type Toast = { kind: "saved" } | { kind: "error"; message: string } | null;
 
 const SEARCH_DEBOUNCE_MS = 250;
 const HOME_RECENT_FETCH = 16; // fetch extra so merge can still fill 8 after desk dedupe
+const CONFIRM_IDLE_MS = 5_000;
+const CONFIRM_DONE_MS = 800;
 
 /** Best-effort hostname for display; falls back to the raw string. */
 function host(url: string): string {
@@ -119,12 +122,22 @@ export function Panel() {
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
   const [homeEpoch, setHomeEpoch] = useState(0);
+  const [confirm, setConfirm] = useState<ConfirmState>({ kind: "hidden" });
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const confirmInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
   const homeAbortRef = useRef<AbortController | null>(null);
+  const confirmIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const confirmDoneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True only when the panel window was hidden and we showed it purely to
+  // display this confirm strip — so dismissing/finishing it re-hides the
+  // window instead of leaving a panel the user never asked to see.
+  const confirmShownPanelRef = useRef(false);
+  const confirmTitleRef = useRef("");
 
   const mode = detectMode(query);
   const queryEmpty = query.trim().length === 0;
@@ -204,6 +217,119 @@ export function Panel() {
     });
     return () => unlisten?.();
   }, []);
+
+  function dispatchConfirm(e: Parameters<typeof confirmReduce>[1]) {
+    setConfirm((s) => confirmReduce(s, e));
+  }
+
+  async function hidePanelIfShownForConfirm() {
+    if (!confirmShownPanelRef.current) return;
+    confirmShownPanelRef.current = false;
+    try {
+      await getCurrentWindow().hide();
+    } catch {
+      // Already hidden; ignore.
+    }
+  }
+
+  // The global-shortcut save flow (⌘⇧S from any app) emits this once the
+  // save round-trips; the panel-originated save path dispatches the same
+  // event locally in performSave.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<{ itemId: string; title: string }>("save-confirmed", (event) => {
+      void (async () => {
+        try {
+          const visible = await getCurrentWindow().isVisible();
+          if (!visible) {
+            confirmShownPanelRef.current = true;
+            await getCurrentWindow().show();
+            await getCurrentWindow().setFocus();
+          }
+        } catch {
+          // Best-effort — the strip still renders even if we can't show/focus.
+        }
+        setConfirmError(null);
+        dispatchConfirm({ type: "saved", itemId: event.payload.itemId, title: event.payload.title });
+      })();
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  // Keep the last known title around: the reducer's "done" state carries no
+  // payload, so the strip needs it cached to keep showing "Saved — {title}".
+  useEffect(() => {
+    if (confirm.kind === "confirming" || confirm.kind === "saving-tags") {
+      confirmTitleRef.current = confirm.title;
+    }
+  }, [confirm]);
+
+  useEffect(() => {
+    if (confirm.kind === "confirming") {
+      confirmInputRef.current?.focus();
+    }
+  }, [confirm]);
+
+  // 5s idle timeout while the tag input is live; resets on every keystroke
+  // since `confirm` changes identity on each `type-tags` dispatch.
+  useEffect(() => {
+    if (confirmIdleTimerRef.current) clearTimeout(confirmIdleTimerRef.current);
+    if (confirm.kind !== "confirming") return;
+    confirmIdleTimerRef.current = setTimeout(() => {
+      dispatchConfirm({ type: "idle-timeout" });
+      void hidePanelIfShownForConfirm();
+    }, CONFIRM_IDLE_MS);
+    return () => {
+      if (confirmIdleTimerRef.current) clearTimeout(confirmIdleTimerRef.current);
+    };
+  }, [confirm]);
+
+  // Brief tick on "done" before hiding the strip (and the panel, if we only
+  // showed it for this confirm).
+  useEffect(() => {
+    if (confirm.kind !== "done") return;
+    if (confirmDoneTimerRef.current) clearTimeout(confirmDoneTimerRef.current);
+    confirmDoneTimerRef.current = setTimeout(() => {
+      setConfirm({ kind: "hidden" });
+      void hidePanelIfShownForConfirm();
+    }, CONFIRM_DONE_MS);
+    return () => {
+      if (confirmDoneTimerRef.current) clearTimeout(confirmDoneTimerRef.current);
+    };
+  }, [confirm]);
+
+  useEffect(() => {
+    return () => {
+      if (confirmIdleTimerRef.current) clearTimeout(confirmIdleTimerRef.current);
+      if (confirmDoneTimerRef.current) clearTimeout(confirmDoneTimerRef.current);
+    };
+  }, []);
+
+  async function onConfirmSubmit() {
+    if (confirm.kind !== "confirming") return;
+    const { itemId, tags } = confirm;
+    dispatchConfirm({ type: "submit" });
+    try {
+      await setUserTags(itemId, parseTags(tags), settings ?? undefined);
+      dispatchConfirm({ type: "submit-ok" });
+    } catch {
+      setConfirmError("Couldn't save tags — try again.");
+      dispatchConfirm({ type: "submit-failed" });
+    }
+  }
+
+  function onConfirmTagKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void onConfirmSubmit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      dispatchConfirm({ type: "dismiss" });
+      void hidePanelIfShownForConfirm();
+    }
+  }
 
   // Home: Desk + Recent when the query is empty.
   useEffect(() => {
@@ -342,6 +468,14 @@ export function Panel() {
       const res = await saveItem(body, settings);
       if (res.ok) {
         showSavedToast();
+        if (res.item) {
+          setConfirmError(null);
+          dispatchConfirm({
+            type: "saved",
+            itemId: res.item.id,
+            title: res.item.title || host(res.item.url),
+          });
+        }
         return;
       }
       if (res.status === 401) {
@@ -483,6 +617,36 @@ export function Panel() {
         <div style={styles.understood}>Understood as “{understood}”</div>
       ) : null}
 
+      {confirm.kind !== "hidden" ? (
+        <div style={styles.confirmStrip}>
+          <span style={styles.confirmTitle}>Saved — {confirmTitleRef.current}</span>
+          {confirm.kind === "done" ? (
+            <span style={styles.confirmDone}>Tagged ✓</span>
+          ) : (
+            <>
+              <input
+                ref={confirmInputRef}
+                style={styles.confirmInput}
+                value={confirm.kind === "confirming" || confirm.kind === "saving-tags" ? confirm.tags : ""}
+                onChange={(e) => {
+                  setConfirmError(null);
+                  dispatchConfirm({ type: "type-tags", tags: e.target.value });
+                }}
+                onKeyDown={onConfirmTagKeyDown}
+                placeholder="Add tags…"
+                disabled={confirm.kind === "saving-tags"}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <span style={{ ...styles.confirmHint, ...(confirmError ? { color: tokens.color.danger } : {}) }}>
+                {confirmError ?? (confirm.kind === "saving-tags" ? "Saving…" : "Enter to tag · Esc to skip")}
+              </span>
+            </>
+          )}
+        </div>
+      ) : null}
+
       <div style={styles.body}>
         {toast?.kind === "saved" ? (
           <div style={styles.toastRow}>Saved ✓</div>
@@ -615,6 +779,45 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 18,
     fontFamily: tokens.font.sans,
     color: tokens.color.ink,
+  },
+  confirmStrip: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "8px 16px",
+    borderBottom: `1px solid ${tokens.color.hairline}`,
+    background: tokens.color.noteSurface,
+  },
+  confirmTitle: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: tokens.color.ink,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    maxWidth: "40%",
+  },
+  confirmInput: {
+    flex: 1,
+    border: `1px solid ${tokens.color.hairline}`,
+    borderRadius: 8,
+    background: tokens.color.cardSurface,
+    color: tokens.color.ink,
+    fontSize: 13,
+    fontFamily: tokens.font.sans,
+    padding: "6px 10px",
+    minWidth: 0,
+  },
+  confirmHint: {
+    fontFamily: tokens.font.mono,
+    fontSize: 10,
+    color: tokens.color.inkFaint,
+    whiteSpace: "nowrap",
+  },
+  confirmDone: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: tokens.color.green,
   },
   understood: {
     fontFamily: tokens.font.mono,
