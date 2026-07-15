@@ -114,6 +114,7 @@ export function HighlightableBody({ body, itemId }: { body: string; itemId: stri
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [pending, setPending] = useState<PendingSelection | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,26 +147,31 @@ export function HighlightableBody({ body, itemId }: { body: string; itemId: stri
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
       setPending(null);
+      setSaveFailed(false);
       return;
     }
     const text = sel.toString();
     if (!text.trim() || !containerRef.current) {
       setPending(null);
+      setSaveFailed(false);
       return;
     }
     const range = sel.getRangeAt(0);
     if (!containerRef.current.contains(range.commonAncestorContainer)) {
       setPending(null);
+      setSaveFailed(false);
       return;
     }
     const start = absoluteOffset(range.startContainer, range.startOffset);
     const end = absoluteOffset(range.endContainer, range.endOffset);
     if (start == null || end == null || end <= start) {
       setPending(null);
+      setSaveFailed(false);
       return;
     }
     const rect = range.getBoundingClientRect();
     const containerRect = containerRef.current.getBoundingClientRect();
+    setSaveFailed(false);
     setPending({
       top: rect.top - containerRect.top - 36,
       left: rect.left - containerRect.left,
@@ -177,6 +183,7 @@ export function HighlightableBody({ body, itemId }: { body: string; itemId: stri
   async function saveHighlight() {
     if (!pending || saving) return;
     setSaving(true);
+    setSaveFailed(false);
     const { start, end } = pending;
     const exact = body.slice(start, end);
     const prefix = body.slice(Math.max(0, start - CONTEXT_CHARS), start);
@@ -187,14 +194,17 @@ export function HighlightableBody({ body, itemId }: { body: string; itemId: stri
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ exact, prefix, suffix, offsetHint: start }),
       });
-      if (res.ok) {
-        const data = (await res.json()) as CreateHighlightResponse;
-        setHighlights((prev) => [...prev, data.highlight]);
+      if (!res.ok) {
+        throw new Error(`highlight save failed: ${res.status}`);
       }
-    } finally {
-      setSaving(false);
+      const data = (await res.json()) as CreateHighlightResponse;
+      setHighlights((prev) => [...prev, data.highlight]);
       setPending(null);
       window.getSelection()?.removeAllRanges();
+    } catch {
+      setSaveFailed(true);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -212,9 +222,9 @@ export function HighlightableBody({ body, itemId }: { body: string; itemId: stri
             zIndex: 2,
             font: `500 11px/1 ${font.mono}`,
             letterSpacing: ".02em",
-            color: color.ink,
+            color: saveFailed ? color.terracotta : color.ink,
             background: color.noteSurface,
-            border: `1px solid ${color.hairline}`,
+            border: `1px solid ${saveFailed ? color.terracotta : color.hairline}`,
             borderRadius: 20,
             padding: "6px 12px",
             cursor: saving ? "default" : "pointer",
@@ -222,7 +232,7 @@ export function HighlightableBody({ body, itemId }: { body: string; itemId: stri
             boxShadow: "0 8px 20px -8px rgba(0,0,0,.4)",
           }}
         >
-          Highlight
+          {saveFailed ? "Failed — retry" : "Highlight"}
         </button>
       ) : null}
       {paragraphs.map((para, i) => (

@@ -21,13 +21,24 @@ const (
 	maxHighlightContextRunes = 64
 )
 
-// truncRunes caps s at n runes without splitting a rune.
+// truncRunes caps s at n runes without splitting a rune, keeping the head.
+// Use for suffix: the text nearest the selection is at the start.
 func truncRunes(s string, n int) string {
 	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
 	r := []rune(s)
 	return string(r[:n])
+}
+
+// truncRunesTail caps s at n runes without splitting a rune, keeping the
+// tail. Use for prefix: the text nearest the selection is at the end.
+func truncRunesTail(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[len(r)-n:])
 }
 
 // CreateItemHighlight saves a text selection on an item as a highlight plus a
@@ -52,7 +63,7 @@ func (s *Server) CreateItemHighlight(w http.ResponseWriter, r *http.Request, id 
 	}
 	prefix, suffix := "", ""
 	if req.Prefix != nil {
-		prefix = truncRunes(*req.Prefix, maxHighlightContextRunes)
+		prefix = truncRunesTail(*req.Prefix, maxHighlightContextRunes)
 	}
 	if req.Suffix != nil {
 		suffix = truncRunes(*req.Suffix, maxHighlightContextRunes)

@@ -43,7 +43,7 @@ CREATE INDEX highlights_source_idx ON highlights (user_id, source_item_id);
 - `POST /items/{id}/highlights` `{exact, prefix?, suffix?, offsetHint?}` →
   `201 {highlight, quoteItem}`. Validation: source item exists and is yours
   (404 otherwise), `exact` non-empty after trim (400), caps enforced (400).
-- `GET /items/{id}/highlights` → `200 {highlights: [...]}` (for painting;
+- `GET /items/{id}/highlights` → `200 [...]` (bare array, for painting;
   each carries its `quote_item_id`).
 - `DELETE /highlights/{id}` → `204`; removes the highlight AND its quote
   card (the FK cascade runs quote→highlight, so the handler deletes the
