@@ -145,8 +145,11 @@ fn rebind_shortcuts(
         Err(_) => {
             let _ = gs.unregister(new_save);
             let _ = gs.unregister(new_find);
-            let _ = gs.register(old_save);
-            let _ = gs.register(old_find);
+            let restore_save = gs.register(old_save);
+            let restore_find = gs.register(old_find);
+            if restore_save.is_err() || restore_find.is_err() {
+                notify(&app, "Shortcuts unavailable — use the tray menu instead.");
+            }
             Err(INVALID_SHORTCUT_MSG.to_string())
         }
     }

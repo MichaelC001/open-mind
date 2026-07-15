@@ -196,7 +196,16 @@ export function Panel() {
         // The panel floats: losing focus no longer hides it (Esc / ⌘⇧O / tray
         // do), so it can sit beside whatever you're reading.
         if (focused) {
-          inputRef.current?.focus();
+          // When the panel was auto-shown for a confirm, the confirm's own
+          // autofocus effect owns the first keystrokes (it runs synchronously
+          // off the `confirm` state change, before this async focus callback
+          // resolves). Focusing the search input here would race it and can
+          // steal focus back from the tag input after the confirm autofocus
+          // already won. Skip it in that case — the confirm effect handles
+          // focus placement instead.
+          if (!confirmShownPanelRef.current) {
+            inputRef.current?.focus();
+          }
           bumpHome();
         }
       })
@@ -234,6 +243,15 @@ export function Panel() {
     } catch {
       // Already hidden; ignore.
     }
+  }
+
+  // The user has repurposed a panel that was only auto-shown for a confirm
+  // (focusing or typing in the search box while the strip is up). From here
+  // on the window is "theirs" — the 5s confirm-idle timeout must still be
+  // free to dismiss the strip itself, but it must never hide the whole
+  // window out from under an in-progress search.
+  function releaseConfirmAutoHide() {
+    confirmShownPanelRef.current = false;
   }
 
   // The global-shortcut save flow (⌘⇧S from any app) emits this once the
@@ -626,7 +644,11 @@ export function Panel() {
           ref={inputRef}
           style={styles.input}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            releaseConfirmAutoHide();
+          }}
+          onFocus={releaseConfirmAutoHide}
           onKeyDown={onInputKeyDown}
           placeholder="Search your mind, or paste a link…"
           autoCapitalize="off"

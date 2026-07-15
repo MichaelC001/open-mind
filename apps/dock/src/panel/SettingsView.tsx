@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { tokens } from "@openmind/ui";
 import { checkToken, claimDeviceCode } from "../lib/api";
-import { captureToAccelerator, DEFAULT_QUICK_SAVE, DEFAULT_QUICK_FIND } from "../lib/accelerator";
+import { captureToAccelerator, normaliseDisplay, DEFAULT_QUICK_SAVE, DEFAULT_QUICK_FIND } from "../lib/accelerator";
 import { clearSettings, setSettings, type Settings } from "../lib/settings";
 import { DragRegion } from "../components/DragRegion";
 
@@ -64,8 +64,8 @@ export function SettingsView({
   async function loadShortcuts() {
     try {
       const pair = await invoke<ShortcutPair>("get_shortcuts");
-      setQuickSave(pair.quick_save);
-      setQuickFind(pair.quick_find);
+      setQuickSave(normaliseDisplay(pair.quick_save));
+      setQuickFind(normaliseDisplay(pair.quick_find));
     } catch {
       // Non-Tauri contexts (tests) or a boot glitch — keep the defaults shown.
     }
