@@ -655,7 +655,7 @@ components:
           items: { type: string, enum: [article, product, book, recipe, video, tweet, image, note, quote] }
     Lens:
       type: object
-      required: [id, name, rule, createdAt]
+      required: [id, name, rule, createdAt, digestSchedule]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }

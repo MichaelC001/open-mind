@@ -292,7 +292,7 @@ type Lens struct {
 	CreatedAt time.Time `json:"createdAt"`
 
 	// DigestSchedule Cron-like digest schedule string; empty means digests are disabled for this Lens.
-	DigestSchedule *string            `json:"digestSchedule,omitempty"`
+	DigestSchedule string             `json:"digestSchedule"`
 	Id             openapi_types.UUID `json:"id"`
 
 	// LastDigestAt When this Lens last sent a digest; null if it never has.

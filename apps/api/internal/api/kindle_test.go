@@ -12,7 +12,7 @@ import (
 
 // kindleErrorBody is the exact 409 payload the handlers must return when
 // Send-to-Kindle is unconfigured.
-const kindleUnconfiguredBody = "kindle is not configured — set SMTP_HOST, SMTP_FROM and KINDLE_EMAIL"
+const kindleUnconfiguredBody = "kindle is not configured — set your Kindle address in Settings, or set KINDLE_EMAIL on the server"
 
 func decodeError(t *testing.T, resp *http.Response) string {
 	t.Helper()
@@ -123,6 +123,46 @@ func TestKindleItemHappyPathQueuesJob(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("send_kindle job rows = %d, want 1", count)
+	}
+}
+
+// TestKindleItemUserSettingConfiguresRecipient asserts a user's own
+// kindle_email setting satisfies the configured gate even with no server-wide
+// env config: the recipient chain resolves per-user first.
+func TestKindleItemUserSettingConfiguresRecipient(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), false))
+	t.Cleanup(srv.Close)
+
+	patch := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"kindleEmail":"me@kindle.com"}`)
+	patch.Body.Close()
+
+	id := createNoteItem(t, srv.URL, "send me")
+
+	resp := doJSON(t, http.MethodPost, srv.URL+"/items/"+id+"/kindle", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+}
+
+// TestKindleItemNoSettingNoEnvReturns409ExactMessage confirms the 409 message
+// mentions both the Settings UI and the server env var, since either path can
+// configure it.
+func TestKindleItemNoSettingNoEnvReturns409ExactMessage(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrvWithKindle(t, s, rc, "", ai.NewNoop(), false))
+	t.Cleanup(srv.Close)
+
+	id := createNoteItem(t, srv.URL, "send me")
+
+	resp := doJSON(t, http.MethodPost, srv.URL+"/items/"+id+"/kindle", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if got := decodeError(t, resp); got != kindleUnconfiguredBody {
+		t.Errorf("error = %q, want %q", got, kindleUnconfiguredBody)
 	}
 }
 

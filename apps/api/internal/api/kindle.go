@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 	"github.com/riverqueue/river"
@@ -15,8 +17,20 @@ import (
 )
 
 // kindleNotConfiguredMsg is returned verbatim as the 409 body's "error"
-// field, so operators get the exact env vars to set.
-const kindleNotConfiguredMsg = "kindle is not configured — set SMTP_HOST, SMTP_FROM and KINDLE_EMAIL"
+// field when neither a per-user Kindle address nor the server-wide env
+// config is set.
+const kindleNotConfiguredMsg = "kindle is not configured — set your Kindle address in Settings, or set KINDLE_EMAIL on the server"
+
+// kindleConfiguredFor reports whether Send-to-Kindle can resolve a
+// destination address for uid: either the server has env config, or the
+// user has set their own kindle_email setting.
+func (s *Server) kindleConfiguredFor(ctx context.Context, uid uuid.UUID) bool {
+	if s.kindleConfigured {
+		return true
+	}
+	_, err := s.store.Queries.GetUserSetting(ctx, db.GetUserSettingParams{UserID: uid, Key: kindleSettingKey})
+	return err == nil
+}
 
 // kindleMaxAttempts caps River retries for a send_kindle job: SMTP failures
 // are usually transient, but a job should eventually give up rather than
@@ -40,7 +54,7 @@ func (s *Server) SendItemToKindle(w http.ResponseWriter, r *http.Request, id ope
 		writeError(w, http.StatusInternalServerError, "could not fetch item")
 		return
 	}
-	if !s.kindleConfigured {
+	if !s.kindleConfiguredFor(ctx, uid) {
 		writeError(w, http.StatusConflict, kindleNotConfiguredMsg)
 		return
 	}
@@ -76,7 +90,7 @@ func (s *Server) SendLensToKindle(w http.ResponseWriter, r *http.Request, id ope
 		writeError(w, http.StatusInternalServerError, "could not fetch lens")
 		return
 	}
-	if !s.kindleConfigured {
+	if !s.kindleConfiguredFor(ctx, uid) {
 		writeError(w, http.StatusConflict, kindleNotConfiguredMsg)
 		return
 	}

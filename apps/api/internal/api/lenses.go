@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -18,6 +19,20 @@ import (
 )
 
 const maxLensNameRunes = 120
+
+// weeklyScheduleRe matches "weekly:0".."weekly:6" (Sunday=0..Saturday=6).
+var weeklyScheduleRe = regexp.MustCompile(`^weekly:[0-6]$`)
+
+// validDigestSchedule reports whether v is a recognised digest schedule:
+// empty (disabled), "daily", or "weekly:0".."weekly:6".
+func validDigestSchedule(v string) bool {
+	switch v {
+	case "", "daily":
+		return true
+	default:
+		return weeklyScheduleRe.MatchString(v)
+	}
+}
 
 // validCardType reports whether t is one of the card types the schema allows,
 // used to reject unknown type filters in a Lens rule.
@@ -92,29 +107,34 @@ func marshalRule(n normalisedRule) ([]byte, error) {
 }
 
 // decodeLensRequest reads and validates a create/update body (both share the
-// CreateLensRequest shape). It returns the trimmed name and canonical rule.
-func decodeLensRequest(w http.ResponseWriter, r *http.Request) (string, normalisedRule, bool) {
+// CreateLensRequest shape). It returns the trimmed name, canonical rule, and
+// the raw digestSchedule (nil if the field was omitted).
+func decodeLensRequest(w http.ResponseWriter, r *http.Request) (string, normalisedRule, *string, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var req CreateLensRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return "", normalisedRule{}, false
+		return "", normalisedRule{}, nil, false
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "name is required")
-		return "", normalisedRule{}, false
+		return "", normalisedRule{}, nil, false
 	}
 	if utf8.RuneCountInString(name) > maxLensNameRunes {
 		writeError(w, http.StatusBadRequest, "name too long (max 120 chars)")
-		return "", normalisedRule{}, false
+		return "", normalisedRule{}, nil, false
 	}
 	rule, err := parseRule(req.Rule)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return "", normalisedRule{}, false
+		return "", normalisedRule{}, nil, false
 	}
-	return name, rule, true
+	if req.DigestSchedule != nil && !validDigestSchedule(*req.DigestSchedule) {
+		writeError(w, http.StatusBadRequest, "invalid digest schedule")
+		return "", normalisedRule{}, nil, false
+	}
+	return name, rule, req.DigestSchedule, true
 }
 
 // ListLenses returns the caller's saved Lenses, newest first. Always an array.
@@ -135,7 +155,7 @@ func (s *Server) ListLenses(w http.ResponseWriter, r *http.Request) {
 
 // CreateLens persists a new Lens and returns 201.
 func (s *Server) CreateLens(w http.ResponseWriter, r *http.Request) {
-	name, rule, ok := decodeLensRequest(w, r)
+	name, rule, digestSchedule, ok := decodeLensRequest(w, r)
 	if !ok {
 		return
 	}
@@ -146,11 +166,20 @@ func (s *Server) CreateLens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	l, err := s.store.Queries.CreateLens(ctx, db.CreateLensParams{UserID: userID(ctx), Name: name, Rule: raw})
+	uid := userID(ctx)
+	l, err := s.store.Queries.CreateLens(ctx, db.CreateLensParams{UserID: uid, Name: name, Rule: raw})
 	if err != nil {
 		slog.Error("creating lens", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not save lens")
 		return
+	}
+	if digestSchedule != nil && *digestSchedule != "" {
+		l, err = s.store.Queries.UpdateLensDigestSchedule(ctx, db.UpdateLensDigestScheduleParams{UserID: uid, ID: l.ID, DigestSchedule: *digestSchedule})
+		if err != nil {
+			slog.Error("setting lens digest schedule", "err", err)
+			writeError(w, http.StatusInternalServerError, "could not save lens")
+			return
+		}
 	}
 	writeJSON(w, http.StatusCreated, toAPILens(l))
 }
@@ -173,7 +202,7 @@ func (s *Server) GetLens(w http.ResponseWriter, r *http.Request, id openapi_type
 
 // UpdateLens renames a Lens and/or replaces its rule; unknown id → 404.
 func (s *Server) UpdateLens(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
-	name, rule, ok := decodeLensRequest(w, r)
+	name, rule, digestSchedule, ok := decodeLensRequest(w, r)
 	if !ok {
 		return
 	}
@@ -184,7 +213,8 @@ func (s *Server) UpdateLens(w http.ResponseWriter, r *http.Request, id openapi_t
 		return
 	}
 	ctx := r.Context()
-	l, err := s.store.Queries.UpdateLens(ctx, db.UpdateLensParams{UserID: userID(ctx), ID: id, Name: name, Rule: raw})
+	uid := userID(ctx)
+	l, err := s.store.Queries.UpdateLens(ctx, db.UpdateLensParams{UserID: uid, ID: id, Name: name, Rule: raw})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "lens not found")
@@ -193,6 +223,18 @@ func (s *Server) UpdateLens(w http.ResponseWriter, r *http.Request, id openapi_t
 		slog.Error("updating lens", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update lens")
 		return
+	}
+	if digestSchedule != nil {
+		l, err = s.store.Queries.UpdateLensDigestSchedule(ctx, db.UpdateLensDigestScheduleParams{UserID: uid, ID: id, DigestSchedule: *digestSchedule})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "lens not found")
+				return
+			}
+			slog.Error("updating lens digest schedule", "err", err)
+			writeError(w, http.StatusInternalServerError, "could not update lens")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, toAPILens(l))
 }
@@ -279,10 +321,16 @@ func toAPILens(l db.Lense) Lens {
 			slog.Warn("decoding lens rule for response", "lens_id", l.ID, "err", err)
 		}
 	}
-	return Lens{
-		Id:        openapi_types.UUID(l.ID),
-		Name:      l.Name,
-		Rule:      rule,
-		CreatedAt: l.CreatedAt.Time,
+	out := Lens{
+		Id:             openapi_types.UUID(l.ID),
+		Name:           l.Name,
+		Rule:           rule,
+		CreatedAt:      l.CreatedAt.Time,
+		DigestSchedule: l.DigestSchedule,
 	}
+	if l.LastDigestAt.Valid {
+		lastDigestAt := l.LastDigestAt.Time
+		out.LastDigestAt = &lastDigestAt
+	}
+	return out
 }

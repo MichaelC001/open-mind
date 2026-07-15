@@ -148,6 +148,7 @@ func guarded(method, path string) bool {
 		(method == http.MethodGet && path == "/export") ||
 		(method == http.MethodPost && path == "/assets") ||
 		(method == http.MethodPost && path == "/feeds") ||
+		(method == http.MethodPatch && path == "/settings") ||
 		// Kindle sends enqueue an SMTP delivery per call — unthrottled they'd be
 		// an email-amplification vector, so both are guarded like other writes.
 		(method == http.MethodPost && strings.HasPrefix(path, "/items/") && strings.HasSuffix(path, "/kindle")) ||

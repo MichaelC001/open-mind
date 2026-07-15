@@ -578,7 +578,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             /** @description Cron-like digest schedule string; empty means digests are disabled for this Lens. */
-            digestSchedule?: string;
+            digestSchedule: string;
             /**
              * Format: date-time
              * @description When this Lens last sent a digest; null if it never has.
