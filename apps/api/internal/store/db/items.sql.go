@@ -13,6 +13,24 @@ import (
 	pgvector_go "github.com/pgvector/pgvector-go"
 )
 
+const adoptFeedItems = `-- name: AdoptFeedItems :execrows
+UPDATE items SET feed_id = $3 WHERE user_id = $1 AND id = ANY($2::uuid[]) AND feed_id IS NULL
+`
+
+type AdoptFeedItemsParams struct {
+	UserID  uuid.UUID
+	Column2 []uuid.UUID
+	FeedID  pgtype.UUID
+}
+
+func (q *Queries) AdoptFeedItems(ctx context.Context, arg AdoptFeedItemsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, adoptFeedItems, arg.UserID, arg.Column2, arg.FeedID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countDriftCandidates = `-- name: CountDriftCandidates :one
 SELECT count(*) FROM items
 WHERE user_id = $1 AND status = 'enriched' AND pinned_at IS NULL

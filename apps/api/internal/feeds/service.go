@@ -92,7 +92,7 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, feedURL string) (db
 		return db.Feed{}, 0, fmt.Errorf("fetching feed: %w", err)
 	}
 
-	added, err := s.saveEntries(ctx, userID, parsed.Entries)
+	added, ids, err := s.saveEntries(ctx, userID, nil, parsed.Entries)
 	if err != nil {
 		return db.Feed{}, 0, fmt.Errorf("backfilling feed: %w", err)
 	}
@@ -105,6 +105,20 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, feedURL string) (db
 	})
 	if err != nil {
 		return db.Feed{}, 0, fmt.Errorf("creating feed: %w", err)
+	}
+
+	// Backfilled items were created without provenance (see the ordering note
+	// above); now that the feed row exists, adopt them onto it. A failure here
+	// is logged and non-fatal: the items remain Mind-visible (feed_id stays
+	// null) rather than being lost, and this batch is not retried.
+	if len(ids) > 0 {
+		if _, err := s.Store.Queries.AdoptFeedItems(ctx, db.AdoptFeedItemsParams{
+			UserID:  userID,
+			Column2: ids,
+			FeedID:  pgtype.UUID{Bytes: feed.ID, Valid: true},
+		}); err != nil {
+			slog.Error("adopting backfilled items onto feed; items remain Mind-visible without feed provenance", "feed_id", feed.ID, "item_count", len(ids), "err", err)
+		}
 	}
 
 	polled := nowTS()
@@ -131,7 +145,7 @@ func (s *Service) Refresh(ctx context.Context, feed db.Feed) (int, error) {
 		slog.Warn("feed refresh failed", "feed_id", feed.ID, "url", feed.Url, "err", err)
 		return 0, nil
 	}
-	added, err := s.saveEntries(ctx, feed.UserID, parsed.Entries)
+	added, _, err := s.saveEntries(ctx, feed.UserID, &feed.ID, parsed.Entries)
 	if err != nil {
 		s.recordStatus(ctx, feed, "error: "+shortErr(err), feed.Etag, feed.LastModified)
 		slog.Warn("feed refresh failed", "feed_id", feed.ID, "url", feed.Url, "err", err)
@@ -162,10 +176,16 @@ func (s *Service) RefreshDue(ctx context.Context, olderThan time.Duration) error
 // already an item for this user (and not repeated within the batch), enqueuing
 // enrichment for each. Enqueue is best-effort — a failed enqueue is logged, not
 // fatal, since the item is already saved and can be re-enriched later.
-func (s *Service) saveEntries(ctx context.Context, userID uuid.UUID, entries []Entry) (int, error) {
+//
+// feedID is nil for the pre-persist backfill in Add (the feed row doesn't
+// exist yet, so items are created via CreateItem with no provenance) and
+// non-nil for Refresh's polls (items are created via CreateFeedItem, stamped
+// with the feed's id directly). It returns the count and ids of the items
+// created, so a nil-feedID caller can adopt them onto the feed afterwards.
+func (s *Service) saveEntries(ctx context.Context, userID uuid.UUID, feedID *uuid.UUID, entries []Entry) (int, []uuid.UUID, error) {
 	existing, err := s.Store.Queries.ListItemURLs(ctx, userID)
 	if err != nil {
-		return 0, fmt.Errorf("listing item urls: %w", err)
+		return 0, nil, fmt.Errorf("listing item urls: %w", err)
 	}
 	seen := make(map[string]bool, len(existing)+len(entries))
 	for _, u := range existing {
@@ -173,6 +193,7 @@ func (s *Service) saveEntries(ctx context.Context, userID uuid.UUID, entries []E
 	}
 
 	added := 0
+	var ids []uuid.UUID
 	for _, e := range entries {
 		if added >= maxEntriesPerPoll {
 			slog.Warn("feed entries truncated at cap", "cap", maxEntriesPerPoll, "user_id", userID)
@@ -183,9 +204,16 @@ func (s *Service) saveEntries(ctx context.Context, userID uuid.UUID, entries []E
 		}
 		seen[e.URL] = true
 
-		item, err := s.Store.Queries.CreateItem(ctx, db.CreateItemParams{UserID: userID, Url: e.URL})
+		var item db.Item
+		if feedID != nil {
+			item, err = s.Store.Queries.CreateFeedItem(ctx, db.CreateFeedItemParams{
+				UserID: userID, Url: e.URL, FeedID: pgtype.UUID{Bytes: *feedID, Valid: true},
+			})
+		} else {
+			item, err = s.Store.Queries.CreateItem(ctx, db.CreateItemParams{UserID: userID, Url: e.URL})
+		}
 		if err != nil {
-			return added, fmt.Errorf("creating item: %w", err)
+			return added, ids, fmt.Errorf("creating item: %w", err)
 		}
 		if s.River != nil {
 			if _, err := s.River.Insert(ctx, jobs.EnrichArgs{UserID: userID, ItemID: item.ID}, nil); err != nil {
@@ -195,8 +223,9 @@ func (s *Service) saveEntries(ctx context.Context, userID uuid.UUID, entries []E
 			slog.Debug("river client not set; skipping enrichment enqueue", "item_id", item.ID)
 		}
 		added++
+		ids = append(ids, item.ID)
 	}
-	return added, nil
+	return added, ids, nil
 }
 
 // fetchAndParse fetches feedURL with the SSRF-safe client and parses the body.

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rohithgilla12/openmind/api/internal/jobs"
 	"github.com/rohithgilla12/openmind/api/internal/store"
@@ -113,15 +114,30 @@ func TestFeedServiceAddBackfillsAndDedups(t *testing.T) {
 		t.Errorf("status = %q polled = %v, want ok/valid", feed.LastStatus, feed.LastPolledAt.Valid)
 	}
 
+	// ListItems only surfaces items with no feed (or explicitly kept feed items),
+	// so once the two backfilled items are adopted onto the feed they drop out
+	// of this view — only the seeded, feed-less item remains.
 	items, err := s.Store.Queries.ListItems(ctx, db.ListItemsParams{UserID: uid, Limit: 100})
 	if err != nil {
 		t.Fatalf("list items: %v", err)
 	}
-	if len(items) != 3 {
-		t.Errorf("items = %d, want 3 (1 seeded + 2 new)", len(items))
+	if len(items) != 1 {
+		t.Errorf("items = %d, want 1 (seeded item; backfilled items adopted onto feed)", len(items))
 	}
 	if got := countEnrichJobs(t, s); got != 2 {
 		t.Errorf("enrich jobs = %d, want 2", got)
+	}
+
+	// The two backfilled items should have been adopted onto the feed once it
+	// was persisted; the pre-existing seeded item never gets provenance.
+	feedItems, err := s.Store.Queries.ListFeedItems(ctx, db.ListFeedItemsParams{
+		UserID: uid, FilterFeedID: pgtype.UUID{Bytes: feed.ID, Valid: true}, LimitCount: 100,
+	})
+	if err != nil {
+		t.Fatalf("list feed items: %v", err)
+	}
+	if len(feedItems) != 2 {
+		t.Errorf("feed items = %d, want 2 (backfilled items adopted onto feed)", len(feedItems))
 	}
 }
 
@@ -170,6 +186,16 @@ func TestFeedRefreshOnlyNewEntries(t *testing.T) {
 	entries.Store(&[]string{"https://example.com/a", "https://example.com/b", "https://example.com/c"})
 	if n, err := s.Refresh(ctx, feed); err != nil || n != 1 {
 		t.Fatalf("refresh (one new) = (%d, %v), want (1, nil)", n, err)
+	}
+
+	// The newly polled item should carry the feed's id directly (CreateFeedItem),
+	// not via a later adoption step.
+	newItem, err := s.Store.Queries.GetItemByURL(ctx, db.GetItemByURLParams{UserID: uid, Url: "https://example.com/c"})
+	if err != nil {
+		t.Fatalf("get new item: %v", err)
+	}
+	if newItem.FeedID.Bytes != feed.ID || !newItem.FeedID.Valid {
+		t.Errorf("new item feed_id = %+v, want %v", newItem.FeedID, feed.ID)
 	}
 }
 
