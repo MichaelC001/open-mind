@@ -42,6 +42,13 @@ type Backend interface {
 	DeleteLens(ctx context.Context, uid, id uuid.UUID) (db.Lense, error)
 	GetDesk(ctx context.Context, uid uuid.UUID) ([]db.Item, error)
 	GetDrift(ctx context.Context, uid uuid.UUID) ([]db.Item, int, error)
+	Related(ctx context.Context, uid, id uuid.UUID) ([]RelatedResult, error)
+}
+
+// RelatedResult pairs an item with its embedding distance to the query item.
+type RelatedResult struct {
+	Item     db.Item
+	Distance float64
 }
 
 // ItemSummary is the compact item shape returned by list/search tools.

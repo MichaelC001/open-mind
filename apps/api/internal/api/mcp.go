@@ -211,6 +211,49 @@ func (b mcpBackend) GetDrift(ctx context.Context, uid uuid.UUID) ([]db.Item, int
 	return items, int(total), nil
 }
 
+func (b mcpBackend) Related(ctx context.Context, uid, id uuid.UUID) ([]appmcp.RelatedResult, error) {
+	if _, err := b.GetItem(ctx, uid, id); err != nil {
+		return nil, err
+	}
+	rows, err := b.s.store.Queries.RelatedByEmbedding(ctx, db.RelatedByEmbeddingParams{
+		UserID: uid, ItemID: id, MaxDistance: relatedMaxDistance, LimitCount: relatedLimit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("querying related items: %w", err)
+	}
+	out := make([]appmcp.RelatedResult, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, appmcp.RelatedResult{Item: relatedRowToDBItem(row), Distance: row.Distance})
+	}
+	return out, nil
+}
+
+// relatedRowToDBItem maps the RelatedByEmbedding row's item columns back into
+// a db.Item, mirroring relatedRowToAPIItem's field set but without the
+// REST-shape conversion — the MCP adapter deals in db.Item throughout.
+func relatedRowToDBItem(row db.RelatedByEmbeddingRow) db.Item {
+	return db.Item{
+		ID:            row.ID,
+		UserID:        row.UserID,
+		Url:           row.Url,
+		Title:         row.Title,
+		Body:          row.Body,
+		LeadImageUrl:  row.LeadImageUrl,
+		Summary:       row.Summary,
+		Tags:          row.Tags,
+		CardType:      row.CardType,
+		Status:        row.Status,
+		CreatedAt:     row.CreatedAt,
+		UpdatedAt:     row.UpdatedAt,
+		Palette:       row.Palette,
+		UserTags:      row.UserTags,
+		PinnedAt:      row.PinnedAt,
+		LastDriftedAt: row.LastDriftedAt,
+		SearchTsv:     row.SearchTsv,
+		PageCount:     row.PageCount,
+	}
+}
+
 // understoodString renders the parsed-query echo as a short human line for the
 // MCP tool result (the REST layer uses buildUnderstood for its JSON shape).
 func understoodString(text, color string, types []string) string {
