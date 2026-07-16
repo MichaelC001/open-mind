@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rohithgilla12/openmind/api/internal/api"
+	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
 
 // setDriftFields sets status, created_at, pinned_at, and last_drifted_at on an
@@ -193,5 +194,33 @@ func TestDriftMissingOrCrossTenantReturns404(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("cross-tenant drift status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestDriftExcludesUnkeptFeedItems proves an enriched, unkept feed item is not
+// a Drift candidate (it isn't in the library proper yet), while the same item
+// once kept is.
+func TestDriftExcludesUnkeptFeedItems(t *testing.T) {
+	s, rc, pool := testDeps(t)
+	srv := newHTTPTest(t, s, rc)
+
+	feed := seedFeed(t, s, api.DevUserID, "https://drift-feed.example.com/feed")
+	item := seedFeedItem(t, s, api.DevUserID, feed.ID, "https://drift-feed.example.com/1")
+	setDriftFields(t, pool, item.ID.String(), "enriched", time.Now().Add(-time.Hour), nil, nil)
+
+	out := getDrift(t, srv.URL)
+	if out.Total != 0 || len(out.Items) != 0 {
+		t.Errorf("drift with unkept feed item = %+v, want empty", out)
+	}
+
+	if _, err := s.Queries.SetItemKept(context.Background(), db.SetItemKeptParams{
+		UserID: api.DevUserID, ID: item.ID, KeptAt: pgtypeNow(),
+	}); err != nil {
+		t.Fatalf("set kept: %v", err)
+	}
+
+	out = getDrift(t, srv.URL)
+	if out.Total != 1 || len(out.Items) != 1 || out.Items[0].Id.String() != item.ID.String() {
+		t.Errorf("drift after keep = %+v, want the kept item %s", out, item.ID)
 	}
 }

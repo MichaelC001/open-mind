@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
+	"github.com/rohithgilla12/openmind/api/internal/api"
 	"github.com/rohithgilla12/openmind/api/internal/store"
 )
 
@@ -166,6 +167,73 @@ func TestPatchItemPinAndUserTagsTogether(t *testing.T) {
 	}
 	if len(detail.UserTags) != 1 || detail.UserTags[0] != "keep" {
 		t.Errorf("userTags = %v, want [keep]", detail.UserTags)
+	}
+}
+
+func TestPatchKept(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := newHTTPTest(t, s, rc)
+	feed := seedFeed(t, s, api.DevUserID, "https://patch-kept.example.com/feed")
+	item := seedFeedItem(t, s, api.DevUserID, feed.ID, "https://patch-kept.example.com/1")
+
+	resp := patchJSON(t, srv.URL+"/items/"+item.ID.String(), `{"kept":true}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var detail struct {
+		KeptAt *string `json:"keptAt"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if detail.KeptAt == nil {
+		t.Fatal("keptAt = null, want a timestamp")
+	}
+
+	// The item now shows up in home /items.
+	items := listItems(t, srv.URL)
+	found := false
+	for _, it := range items {
+		if it["id"] == item.ID.String() {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("kept item did not appear in home /items")
+	}
+
+	// kept:false clears it again.
+	unset := patchJSON(t, srv.URL+"/items/"+item.ID.String(), `{"kept":false}`)
+	defer unset.Body.Close()
+	if unset.StatusCode != http.StatusOK {
+		t.Fatalf("unset status = %d, want 200", unset.StatusCode)
+	}
+	var unsetDetail struct {
+		KeptAt *string `json:"keptAt"`
+	}
+	if err := json.NewDecoder(unset.Body).Decode(&unsetDetail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if unsetDetail.KeptAt != nil {
+		t.Errorf("keptAt = %v, want null after unset", *unsetDetail.KeptAt)
+	}
+
+	// Combinable with pinned in the same request.
+	both := patchJSON(t, srv.URL+"/items/"+item.ID.String(), `{"kept":true,"pinned":true}`)
+	defer both.Body.Close()
+	if both.StatusCode != http.StatusOK {
+		t.Fatalf("combined status = %d, want 200", both.StatusCode)
+	}
+	var bothDetail struct {
+		KeptAt   *string `json:"keptAt"`
+		PinnedAt *string `json:"pinnedAt"`
+	}
+	if err := json.NewDecoder(both.Body).Decode(&bothDetail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if bothDetail.KeptAt == nil || bothDetail.PinnedAt == nil {
+		t.Errorf("combined patch: keptAt=%v pinnedAt=%v, want both set", bothDetail.KeptAt, bothDetail.PinnedAt)
 	}
 }
 
