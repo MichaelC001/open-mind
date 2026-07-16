@@ -11,7 +11,6 @@
 
 ## Later
 - Lossless AVIF metadata stripping / re-allow AVIF uploads
-- Send to Kindle follow-ups: per-user Kindle address, EPUB covers, in-article images, scheduled Lens digests
 - Omnivore import slice B: ingest archived content from export zips so dead links survive
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
