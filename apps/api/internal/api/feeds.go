@@ -68,7 +68,11 @@ func (s *Server) ListFeeds(w http.ResponseWriter, r *http.Request) {
 // affects no rows (unknown id or another user's feed) returns 404. Already
 // imported items are kept; only polling stops: every still-unkept item from
 // this feed is stamped kept_at = now before the feed row (and its FK) go away,
-// so nothing silently drops out of the library once feed_id is nulled.
+// so nothing silently drops out of the library once feed_id is nulled. This
+// two-step (stamp then delete) is fail-safe if it partially applies: an abort
+// happens before the delete call, so a run that stamps items kept but then
+// fails on delete just leaves the items kept and the feed row intact — safe to
+// retry, no dropped or duplicated items.
 func (s *Server) DeleteFeed(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	ctx := r.Context()
 	uid := userID(ctx)

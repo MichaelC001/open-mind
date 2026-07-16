@@ -130,6 +130,19 @@ func (s *Server) capture(ctx context.Context, uid uuid.UUID, url, note string) (
 					}
 					return item, nil
 				}
+				// rows == 0 means someone else's concurrent keep won the race between
+				// our SetItemKept call and theirs: the item is already kept by the
+				// time we looked, so re-fetch and return it rather than falling
+				// through to a duplicate insert. Only a genuine not-found (the item
+				// vanished entirely) falls through to the plain insert path below.
+				item, err := s.store.Queries.GetItem(ctx, db.GetItemParams{UserID: uid, ID: existing.ID})
+				if err == nil {
+					slog.Warn("promote race: item already kept", "user_id", uid, "item_id", existing.ID)
+					return item, nil
+				}
+				if !errors.Is(err, pgx.ErrNoRows) {
+					return db.Item{}, fmt.Errorf("creating item: %w", err)
+				}
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return db.Item{}, fmt.Errorf("creating item: %w", err)

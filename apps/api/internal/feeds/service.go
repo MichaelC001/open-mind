@@ -94,6 +94,9 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, feedURL string) (db
 
 	added, ids, err := s.saveEntries(ctx, userID, nil, parsed.Entries)
 	if err != nil {
+		if len(ids) > 0 {
+			slog.Warn("backfill failed partway through; already-created items are orphaned (no feed row was persisted)", "user_id", userID, "item_count", len(ids), "item_ids", ids)
+		}
 		return db.Feed{}, 0, fmt.Errorf("backfilling feed: %w", err)
 	}
 
@@ -117,7 +120,7 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, feedURL string) (db
 			Column2: ids,
 			FeedID:  pgtype.UUID{Bytes: feed.ID, Valid: true},
 		}); err != nil {
-			slog.Error("adopting backfilled items onto feed; items remain Mind-visible without feed provenance", "feed_id", feed.ID, "item_count", len(ids), "err", err)
+			slog.Error("adopting backfilled items onto feed; items remain Mind-visible without feed provenance", "feed_id", feed.ID, "user_id", userID, "item_count", len(ids), "err", err)
 		}
 	}
 

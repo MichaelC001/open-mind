@@ -114,6 +114,30 @@ func TestFeedItemsListing(t *testing.T) {
 	}
 }
 
+// TestFeedItemsFilterCrossTenant verifies GET /feed?feedId=<id> scopes by the
+// caller's own feed items even when the id belongs to another user's feed:
+// it must return an empty result, never the other user's items.
+func TestFeedItemsFilterCrossTenant(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := newHTTPTest(t, s, rc)
+
+	other := uuid.MustParse("00000000-0000-0000-0000-0000000000fe")
+	if err := s.Queries.EnsureUser(context.Background(), other); err != nil {
+		t.Fatalf("ensure other user: %v", err)
+	}
+	otherFeed := seedFeed(t, s, other, "https://other-tenant.example.com/feed")
+	seedFeedItem(t, s, other, otherFeed.ID, "https://other-tenant.example.com/1")
+
+	// Dev user has feed items of their own, but none on otherFeed.
+	devFeed := seedFeed(t, s, api.DevUserID, "https://own-tenant.example.com/feed")
+	seedFeedItem(t, s, api.DevUserID, devFeed.ID, "https://own-tenant.example.com/1")
+
+	filtered := getFeed(t, srv.URL+"/feed?feedId="+otherFeed.ID.String())
+	if len(filtered) != 0 {
+		t.Fatalf("filtered feed items for another user's feed id = %d, want 0", len(filtered))
+	}
+}
+
 func TestFeedItemsLimitCap(t *testing.T) {
 	s, rc, _ := testDeps(t)
 	srv := newHTTPTest(t, s, rc)

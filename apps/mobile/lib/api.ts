@@ -181,21 +181,27 @@ export async function listFeedItems(
       method: "GET",
       headers: authHeaders(settings.token),
     });
-    let items: Item[] = [];
     if (res.ok) {
       try {
         const data = (await res.json()) as unknown;
+        let items: Item[] = [];
         if (Array.isArray(data)) {
           items = data as Item[];
         } else if (data && Array.isArray((data as { items?: Item[] }).items)) {
           items = (data as { items: Item[] }).items;
         }
-      } catch {
-        items = [];
+        return { ok: true, status: res.status, items };
+      } catch (err) {
+        // A 200 with unparseable JSON is a real failure, not an empty feed:
+        // surface it as an error so the UI shows "Couldn't load your feed"
+        // instead of silently coercing to an empty, seemingly-healthy list.
+        console.error(err);
+        return { ok: false, status: res.status, items: [] };
       }
     }
-    return { ok: res.ok, status: res.status, items };
-  } catch {
+    return { ok: false, status: res.status, items: [] };
+  } catch (err) {
+    console.error(err);
     return { ok: false, status: 0, items: [] };
   }
 }
@@ -227,7 +233,8 @@ export async function setKept(
       }
     }
     return { ok: res.ok, status: res.status, item };
-  } catch {
+  } catch (err) {
+    console.error(err);
     return { ok: false, status: 0 };
   }
 }
