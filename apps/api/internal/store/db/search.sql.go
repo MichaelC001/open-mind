@@ -56,6 +56,100 @@ func (q *Queries) ListItemsWithPalette(ctx context.Context, userID uuid.UUID) ([
 	return items, nil
 }
 
+const relatedByEmbedding = `-- name: RelatedByEmbedding :many
+SELECT i.id, i.user_id, i.url, i.title, i.body, i.lead_image_url, i.summary, i.tags, i.card_type, i.status, i.created_at, i.updated_at, i.palette, i.user_tags, i.pinned_at, i.last_drifted_at, i.search_tsv, i.page_count, (e.embedding <=> src.embedding)::float8 AS distance
+FROM item_embeddings src
+JOIN item_embeddings e ON e.user_id = src.user_id AND e.item_id <> src.item_id
+JOIN items i ON i.id = e.item_id
+WHERE src.user_id = $1 AND src.item_id = $2
+  AND (e.embedding <=> src.embedding) <= $3::float8
+  AND NOT EXISTS (
+    SELECT 1 FROM links l
+    WHERE l.user_id = src.user_id
+      AND l.a_item = LEAST(src.item_id, e.item_id)
+      AND l.b_item = GREATEST(src.item_id, e.item_id)
+  )
+ORDER BY e.embedding <=> src.embedding
+LIMIT $4
+`
+
+type RelatedByEmbeddingParams struct {
+	UserID      uuid.UUID
+	ItemID      uuid.UUID
+	MaxDistance float64
+	LimitCount  int32
+}
+
+type RelatedByEmbeddingRow struct {
+	ID            uuid.UUID
+	UserID        uuid.UUID
+	Url           string
+	Title         string
+	Body          string
+	LeadImageUrl  string
+	Summary       string
+	Tags          []string
+	CardType      string
+	Status        string
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+	Palette       []string
+	UserTags      []string
+	PinnedAt      pgtype.Timestamptz
+	LastDriftedAt pgtype.Timestamptz
+	SearchTsv     interface{}
+	PageCount     pgtype.Int4
+	Distance      float64
+}
+
+// Nearest unlinked items to the given item's embedding, same user only.
+// The links table stores one canonicalised row per pair (a_item < b_item),
+// so the exclusion checks the pair in canonical order.
+func (q *Queries) RelatedByEmbedding(ctx context.Context, arg RelatedByEmbeddingParams) ([]RelatedByEmbeddingRow, error) {
+	rows, err := q.db.Query(ctx, relatedByEmbedding,
+		arg.UserID,
+		arg.ItemID,
+		arg.MaxDistance,
+		arg.LimitCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RelatedByEmbeddingRow
+	for rows.Next() {
+		var i RelatedByEmbeddingRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Url,
+			&i.Title,
+			&i.Body,
+			&i.LeadImageUrl,
+			&i.Summary,
+			&i.Tags,
+			&i.CardType,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Palette,
+			&i.UserTags,
+			&i.PinnedAt,
+			&i.LastDriftedAt,
+			&i.SearchTsv,
+			&i.PageCount,
+			&i.Distance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const searchFTS = `-- name: SearchFTS :many
 SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, ts_rank(search_tsv, websearch_to_tsquery('english', $2))::float8 AS rank
 FROM items

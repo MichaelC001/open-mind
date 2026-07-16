@@ -12,3 +12,22 @@ ORDER BY e.embedding <=> $2 LIMIT $3;
 
 -- name: ListItemsWithPalette :many
 SELECT * FROM items WHERE user_id = $1 AND cardinality(palette) > 0;
+
+-- name: RelatedByEmbedding :many
+-- Nearest unlinked items to the given item's embedding, same user only.
+-- The links table stores one canonicalised row per pair (a_item < b_item),
+-- so the exclusion checks the pair in canonical order.
+SELECT i.*, (e.embedding <=> src.embedding)::float8 AS distance
+FROM item_embeddings src
+JOIN item_embeddings e ON e.user_id = src.user_id AND e.item_id <> src.item_id
+JOIN items i ON i.id = e.item_id
+WHERE src.user_id = sqlc.arg(user_id) AND src.item_id = sqlc.arg(item_id)
+  AND (e.embedding <=> src.embedding) <= sqlc.arg(max_distance)::float8
+  AND NOT EXISTS (
+    SELECT 1 FROM links l
+    WHERE l.user_id = src.user_id
+      AND l.a_item = LEAST(src.item_id, e.item_id)
+      AND l.b_item = GREATEST(src.item_id, e.item_id)
+  )
+ORDER BY e.embedding <=> src.embedding
+LIMIT sqlc.arg(limit_count);

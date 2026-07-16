@@ -88,6 +88,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/{id}/related": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRelatedItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{id}/kindle": {
         parameters: {
             query?: never;
@@ -503,6 +519,11 @@ export interface components {
         };
         ItemDetail: components["schemas"]["Item"] & {
             body: string;
+        };
+        RelatedItem: {
+            item: components["schemas"]["Item"];
+            /** Format: double */
+            distance: number;
         };
         Highlight: {
             /** Format: uuid */
@@ -946,6 +967,35 @@ export interface operations {
                 content?: never;
             };
             /** @description not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getRelatedItems: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description up to 5 embedding-similar items, nearest first; empty when the item has no embedding */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelatedItem"][];
+                };
+            };
+            /** @description unknown item */
             404: {
                 headers: {
                     [name: string]: unknown;
