@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import type { CSSProperties, ReactNode } from "react";
 import { LinkedSection } from "../../../components/LinkedSection";
 import { Palette } from "../../../components/Palette";
+import { RelatedRail } from "../../../components/RelatedRail";
 import { apiFetch } from "../../../lib/api";
 import { assetSrc } from "../../../lib/assets";
 import { cardKind, domainOf, typeGradient, typeLabel } from "../../../lib/cards";
@@ -221,6 +222,8 @@ function Rail({ item }: { item: ItemDetail }) {
       <TagEditor itemId={item.id} userTags={item.userTags ?? []} />
       {divider}
       <LinkedSection itemId={item.id} />
+      {divider}
+      <RelatedRail itemId={item.id} />
       {divider}
       <p
         className="meta"
