@@ -84,6 +84,8 @@ type Item struct {
 	LastDriftedAt pgtype.Timestamptz
 	SearchTsv     interface{}
 	PageCount     pgtype.Int4
+	FeedID        pgtype.UUID
+	KeptAt        pgtype.Timestamptz
 }
 
 type ItemEmbedding struct {

@@ -8,7 +8,24 @@ INSERT INTO items (user_id, url, body) VALUES ($1, $2, $3) RETURNING *;
 SELECT * FROM items WHERE user_id = $1 AND id = $2;
 
 -- name: ListItems :many
-SELECT * FROM items WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2;
+SELECT * FROM items
+WHERE user_id = $1 AND (feed_id IS NULL OR kept_at IS NOT NULL)
+ORDER BY created_at DESC LIMIT $2;
+
+-- name: CreateFeedItem :one
+INSERT INTO items (user_id, url, feed_id) VALUES ($1, $2, $3) RETURNING *;
+
+-- name: ListFeedItems :many
+SELECT * FROM items
+WHERE user_id = $1 AND feed_id IS NOT NULL
+  AND (sqlc.narg(filter_feed_id)::uuid IS NULL OR feed_id = sqlc.narg(filter_feed_id))
+ORDER BY created_at DESC LIMIT sqlc.arg(limit_count);
+
+-- name: SetItemKept :execrows
+UPDATE items SET kept_at = $3, updated_at = now() WHERE user_id = $1 AND id = $2;
+
+-- name: GetItemByURL :one
+SELECT * FROM items WHERE user_id = $1 AND url = $2 LIMIT 1;
 
 -- name: DeleteItem :execrows
 DELETE FROM items WHERE user_id = $1 AND id = $2;
@@ -40,6 +57,7 @@ SELECT * FROM items WHERE user_id = $1 AND pinned_at IS NOT NULL ORDER BY pinned
 SELECT * FROM items
 WHERE user_id = $1 AND status = 'enriched' AND pinned_at IS NULL
   AND (last_drifted_at IS NULL OR last_drifted_at < now() - interval '30 days')
+  AND (feed_id IS NULL OR kept_at IS NOT NULL)
 ORDER BY last_drifted_at NULLS FIRST, created_at ASC
 LIMIT $2;
 

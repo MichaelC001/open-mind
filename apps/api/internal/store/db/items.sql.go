@@ -26,8 +26,46 @@ func (q *Queries) CountDriftCandidates(ctx context.Context, userID uuid.UUID) (i
 	return count, err
 }
 
+const createFeedItem = `-- name: CreateFeedItem :one
+INSERT INTO items (user_id, url, feed_id) VALUES ($1, $2, $3) RETURNING id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at
+`
+
+type CreateFeedItemParams struct {
+	UserID uuid.UUID
+	Url    string
+	FeedID pgtype.UUID
+}
+
+func (q *Queries) CreateFeedItem(ctx context.Context, arg CreateFeedItemParams) (Item, error) {
+	row := q.db.QueryRow(ctx, createFeedItem, arg.UserID, arg.Url, arg.FeedID)
+	var i Item
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Url,
+		&i.Title,
+		&i.Body,
+		&i.LeadImageUrl,
+		&i.Summary,
+		&i.Tags,
+		&i.CardType,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Palette,
+		&i.UserTags,
+		&i.PinnedAt,
+		&i.LastDriftedAt,
+		&i.SearchTsv,
+		&i.PageCount,
+		&i.FeedID,
+		&i.KeptAt,
+	)
+	return i, err
+}
+
 const createItem = `-- name: CreateItem :one
-INSERT INTO items (user_id, url, body) VALUES ($1, $2, $3) RETURNING id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count
+INSERT INTO items (user_id, url, body) VALUES ($1, $2, $3) RETURNING id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at
 `
 
 type CreateItemParams struct {
@@ -58,12 +96,14 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 		&i.LastDriftedAt,
 		&i.SearchTsv,
 		&i.PageCount,
+		&i.FeedID,
+		&i.KeptAt,
 	)
 	return i, err
 }
 
 const createQuoteItem = `-- name: CreateQuoteItem :one
-INSERT INTO items (user_id, body, card_type, url) VALUES ($1, $2, 'quote', '') RETURNING id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count
+INSERT INTO items (user_id, body, card_type, url) VALUES ($1, $2, 'quote', '') RETURNING id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at
 `
 
 type CreateQuoteItemParams struct {
@@ -93,6 +133,8 @@ func (q *Queries) CreateQuoteItem(ctx context.Context, arg CreateQuoteItemParams
 		&i.LastDriftedAt,
 		&i.SearchTsv,
 		&i.PageCount,
+		&i.FeedID,
+		&i.KeptAt,
 	)
 	return i, err
 }
@@ -146,7 +188,7 @@ func (q *Queries) EnsureUser(ctx context.Context, id uuid.UUID) error {
 }
 
 const getItem = `-- name: GetItem :one
-SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count FROM items WHERE user_id = $1 AND id = $2
+SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at FROM items WHERE user_id = $1 AND id = $2
 `
 
 type GetItemParams struct {
@@ -176,14 +218,54 @@ func (q *Queries) GetItem(ctx context.Context, arg GetItemParams) (Item, error) 
 		&i.LastDriftedAt,
 		&i.SearchTsv,
 		&i.PageCount,
+		&i.FeedID,
+		&i.KeptAt,
+	)
+	return i, err
+}
+
+const getItemByURL = `-- name: GetItemByURL :one
+SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at FROM items WHERE user_id = $1 AND url = $2 LIMIT 1
+`
+
+type GetItemByURLParams struct {
+	UserID uuid.UUID
+	Url    string
+}
+
+func (q *Queries) GetItemByURL(ctx context.Context, arg GetItemByURLParams) (Item, error) {
+	row := q.db.QueryRow(ctx, getItemByURL, arg.UserID, arg.Url)
+	var i Item
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Url,
+		&i.Title,
+		&i.Body,
+		&i.LeadImageUrl,
+		&i.Summary,
+		&i.Tags,
+		&i.CardType,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Palette,
+		&i.UserTags,
+		&i.PinnedAt,
+		&i.LastDriftedAt,
+		&i.SearchTsv,
+		&i.PageCount,
+		&i.FeedID,
+		&i.KeptAt,
 	)
 	return i, err
 }
 
 const listDriftCandidates = `-- name: ListDriftCandidates :many
-SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count FROM items
+SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at FROM items
 WHERE user_id = $1 AND status = 'enriched' AND pinned_at IS NULL
   AND (last_drifted_at IS NULL OR last_drifted_at < now() - interval '30 days')
+  AND (feed_id IS NULL OR kept_at IS NOT NULL)
 ORDER BY last_drifted_at NULLS FIRST, created_at ASC
 LIMIT $2
 `
@@ -221,6 +303,62 @@ func (q *Queries) ListDriftCandidates(ctx context.Context, arg ListDriftCandidat
 			&i.LastDriftedAt,
 			&i.SearchTsv,
 			&i.PageCount,
+			&i.FeedID,
+			&i.KeptAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFeedItems = `-- name: ListFeedItems :many
+SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at FROM items
+WHERE user_id = $1 AND feed_id IS NOT NULL
+  AND ($2::uuid IS NULL OR feed_id = $2)
+ORDER BY created_at DESC LIMIT $3
+`
+
+type ListFeedItemsParams struct {
+	UserID       uuid.UUID
+	FilterFeedID pgtype.UUID
+	LimitCount   int32
+}
+
+func (q *Queries) ListFeedItems(ctx context.Context, arg ListFeedItemsParams) ([]Item, error) {
+	rows, err := q.db.Query(ctx, listFeedItems, arg.UserID, arg.FilterFeedID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Item
+	for rows.Next() {
+		var i Item
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Url,
+			&i.Title,
+			&i.Body,
+			&i.LeadImageUrl,
+			&i.Summary,
+			&i.Tags,
+			&i.CardType,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Palette,
+			&i.UserTags,
+			&i.PinnedAt,
+			&i.LastDriftedAt,
+			&i.SearchTsv,
+			&i.PageCount,
+			&i.FeedID,
+			&i.KeptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -257,7 +395,9 @@ func (q *Queries) ListItemURLs(ctx context.Context, userID uuid.UUID) ([]string,
 }
 
 const listItems = `-- name: ListItems :many
-SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count FROM items WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2
+SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at FROM items
+WHERE user_id = $1 AND (feed_id IS NULL OR kept_at IS NOT NULL)
+ORDER BY created_at DESC LIMIT $2
 `
 
 type ListItemsParams struct {
@@ -293,6 +433,8 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, e
 			&i.LastDriftedAt,
 			&i.SearchTsv,
 			&i.PageCount,
+			&i.FeedID,
+			&i.KeptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -305,7 +447,7 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, e
 }
 
 const listItemsForExport = `-- name: ListItemsForExport :many
-SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count FROM items WHERE user_id = $1 ORDER BY created_at ASC
+SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at FROM items WHERE user_id = $1 ORDER BY created_at ASC
 `
 
 func (q *Queries) ListItemsForExport(ctx context.Context, userID uuid.UUID) ([]Item, error) {
@@ -336,6 +478,8 @@ func (q *Queries) ListItemsForExport(ctx context.Context, userID uuid.UUID) ([]I
 			&i.LastDriftedAt,
 			&i.SearchTsv,
 			&i.PageCount,
+			&i.FeedID,
+			&i.KeptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -348,7 +492,7 @@ func (q *Queries) ListItemsForExport(ctx context.Context, userID uuid.UUID) ([]I
 }
 
 const listPinned = `-- name: ListPinned :many
-SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count FROM items WHERE user_id = $1 AND pinned_at IS NOT NULL ORDER BY pinned_at DESC
+SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at FROM items WHERE user_id = $1 AND pinned_at IS NOT NULL ORDER BY pinned_at DESC
 `
 
 func (q *Queries) ListPinned(ctx context.Context, userID uuid.UUID) ([]Item, error) {
@@ -379,6 +523,8 @@ func (q *Queries) ListPinned(ctx context.Context, userID uuid.UUID) ([]Item, err
 			&i.LastDriftedAt,
 			&i.SearchTsv,
 			&i.PageCount,
+			&i.FeedID,
+			&i.KeptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -388,6 +534,24 @@ func (q *Queries) ListPinned(ctx context.Context, userID uuid.UUID) ([]Item, err
 		return nil, err
 	}
 	return items, nil
+}
+
+const setItemKept = `-- name: SetItemKept :execrows
+UPDATE items SET kept_at = $3, updated_at = now() WHERE user_id = $1 AND id = $2
+`
+
+type SetItemKeptParams struct {
+	UserID uuid.UUID
+	ID     uuid.UUID
+	KeptAt pgtype.Timestamptz
+}
+
+func (q *Queries) SetItemKept(ctx context.Context, arg SetItemKeptParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setItemKept, arg.UserID, arg.ID, arg.KeptAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setItemPageCount = `-- name: SetItemPageCount :exec
