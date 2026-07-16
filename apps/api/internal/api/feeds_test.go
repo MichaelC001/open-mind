@@ -89,14 +89,40 @@ func TestCreateFeedBackfillsAndReturns201(t *testing.T) {
 		t.Errorf("lastStatus = %v, want ok", feed["lastStatus"])
 	}
 
-	// The two entries were backfilled as items and each enqueued enrichment.
-	items, err := s.Queries.ListItems(context.Background(), db.ListItemsParams{UserID: api.DevUserID, Limit: 100})
+	// Feed-river semantics: backfilled items route to GET /feed (with feedId set),
+	// not to GET /items (home list). Each item enqueues enrichment.
+	feedResp, err := http.Get(srv.URL + "/feed")
 	if err != nil {
-		t.Fatalf("list items: %v", err)
+		t.Fatalf("get feed: %v", err)
 	}
-	if len(items) != 2 {
-		t.Errorf("items = %d, want 2", len(items))
+	defer feedResp.Body.Close()
+	var feedItems []map[string]any
+	if err := json.NewDecoder(feedResp.Body).Decode(&feedItems); err != nil {
+		t.Fatalf("decode feed items: %v", err)
 	}
+	if len(feedItems) != 2 {
+		t.Errorf("feed items = %d, want 2", len(feedItems))
+	}
+	for i, item := range feedItems {
+		if item["feedId"] == nil {
+			t.Errorf("feed item %d has no feedId", i)
+		}
+	}
+
+	// Backfilled items must NOT appear in GET /items (home list).
+	homeResp, err := http.Get(srv.URL + "/items")
+	if err != nil {
+		t.Fatalf("get items: %v", err)
+	}
+	defer homeResp.Body.Close()
+	var homeItems []map[string]any
+	if err := json.NewDecoder(homeResp.Body).Decode(&homeItems); err != nil {
+		t.Fatalf("decode home items: %v", err)
+	}
+	if len(homeItems) != 0 {
+		t.Errorf("home items = %d, want 0 (backfilled items in feed only)", len(homeItems))
+	}
+
 	var jobs int
 	if err := pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM river_job WHERE kind = 'enrich_item'`).Scan(&jobs); err != nil {
