@@ -50,36 +50,41 @@ export default function LibraryScreen() {
       if (isRefresh) setRefreshing(true);
       else setState({ kind: "loading" });
 
-      if (q.length === 0) {
-        const res = await listItems(50);
-        if (seq !== requestSeq.current) return;
-        if (res.ok) {
-          setState({ kind: "ready", items: res.items });
-        } else if (res.status === 0) {
-          setState({ kind: "unreachable" });
-        } else if (res.status === 401) {
-          setState({ kind: "rejected" });
+      try {
+        if (q.length === 0) {
+          const res = await listItems(50);
+          if (seq !== requestSeq.current) return;
+          if (res.ok) {
+            setState({ kind: "ready", items: res.items });
+          } else if (res.status === 0) {
+            setState({ kind: "unreachable" });
+          } else if (res.status === 401) {
+            setState({ kind: "rejected" });
+          } else {
+            setState({ kind: "error" });
+          }
         } else {
-          setState({ kind: "error" });
+          const res = await searchItems({ q, parse: true });
+          if (seq !== requestSeq.current) return;
+          if (res.ok) {
+            setState({
+              kind: "ready",
+              items: res.results.map((r) => r.item),
+              understood: res.understood,
+            });
+          } else if (res.status === 0) {
+            setState({ kind: "search-offline" });
+          } else if (res.status === 401) {
+            setState({ kind: "rejected" });
+          } else {
+            setState({ kind: "error" });
+          }
         }
-      } else {
-        const res = await searchItems({ q, parse: true });
-        if (seq !== requestSeq.current) return;
-        if (res.ok) {
-          setState({
-            kind: "ready",
-            items: res.results.map((r) => r.item),
-            understood: res.understood,
-          });
-        } else if (res.status === 0) {
-          setState({ kind: "search-offline" });
-        } else if (res.status === 401) {
-          setState({ kind: "rejected" });
-        } else {
-          setState({ kind: "error" });
-        }
+      } finally {
+        // Always clear the pull-to-refresh spinner, even when a newer request
+        // superseded this one (stale seq early-return).
+        if (isRefresh) setRefreshing(false);
       }
-      if (isRefresh) setRefreshing(false);
     },
     [settings],
   );
