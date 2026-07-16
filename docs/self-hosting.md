@@ -200,6 +200,8 @@ Every item has two independent tag lists:
 
 Tags you enter are canonicalised on save: trimmed, lowercased, deduplicated, capped at 30 tags of up to 50 characters each. Both lists feed full-text search (`GET /search?q=...`), and the web UI shows the deduplicated union of AI + your tags on cards and in the detail view.
 
+**Related suggestions.** Once items are embedded (requires an AI provider with embeddings — hidden under `noop`), the detail page's rail shows up to five **Related** items by semantic similarity, each with a one-tap **+ Link** that creates a normal bidirectional link. Agents get the same view via the MCP `related_items` tool.
+
 **Imports keep their tags.** Netscape bookmark exports (`TAGS="a,b"` on an `<A>` element) and CSV exports with a `tags` column (Pocket, Raindrop) are captured as your tags on the created item — they are not lost when enrichment later sets the AI tags.
 
 > Caveat: tag search uses `array_to_tsvector`, which indexes tags as literal lexemes without English stemming. A single-morpheme tag like `mine` matches a search for `mine`; a tag like `favourite` will not match a query for `favourite` if Postgres's English text-search config would otherwise stem it to a different form. Exact tag lookups are unaffected.

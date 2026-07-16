@@ -323,6 +323,12 @@ type PatchSettingsRequest struct {
 	KindleEmail *openapi_types.Email `json:"kindleEmail,omitempty"`
 }
 
+// RelatedItem defines model for RelatedItem.
+type RelatedItem struct {
+	Distance float64 `json:"distance"`
+	Item     Item    `json:"item"`
+}
+
 // SearchResponse defines model for SearchResponse.
 type SearchResponse struct {
 	Results []SearchResult `json:"results"`
@@ -527,6 +533,9 @@ type ServerInterface interface {
 	// (DELETE /items/{id}/links/{toId})
 	DeleteItemLink(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, toId openapi_types.UUID)
 
+	// (GET /items/{id}/related)
+	GetRelatedItems(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+
 	// (GET /lenses)
 	ListLenses(w http.ResponseWriter, r *http.Request)
 
@@ -703,6 +712,11 @@ func (_ Unimplemented) CreateItemLink(w http.ResponseWriter, r *http.Request, id
 // Remove a link
 // (DELETE /items/{id}/links/{toId})
 func (_ Unimplemented) DeleteItemLink(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, toId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (GET /items/{id}/related)
+func (_ Unimplemented) GetRelatedItems(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1490,6 +1504,37 @@ func (siw *ServerInterfaceWrapper) DeleteItemLink(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// GetRelatedItems operation middleware
+func (siw *ServerInterfaceWrapper) GetRelatedItems(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetRelatedItems(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListLenses operation middleware
 func (siw *ServerInterfaceWrapper) ListLenses(w http.ResponseWriter, r *http.Request) {
 
@@ -1970,6 +2015,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/items/{id}/links/{toId}", wrapper.DeleteItemLink)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/items/{id}/related", wrapper.GetRelatedItems)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/lenses", wrapper.ListLenses)

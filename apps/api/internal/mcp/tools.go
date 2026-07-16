@@ -68,6 +68,13 @@ type driftOut struct {
 	Items []ItemSummary `json:"items"`
 	Total int           `json:"total"`
 }
+type relatedOut struct {
+	Results []RelatedHit `json:"results"`
+}
+type RelatedHit struct {
+	Item     ItemSummary `json:"item"`
+	Distance float64     `json:"distance"`
+}
 
 func registerTools(s *mcp.Server, b Backend, uidFor func(context.Context) uuid.UUID) {
 	mcp.AddTool(s, &mcp.Tool{
@@ -311,6 +318,28 @@ func registerTools(s *mcp.Server, b Backend, uidFor func(context.Context) uuid.U
 		out := driftOut{Items: make([]ItemSummary, 0, len(items)), Total: total}
 		for _, it := range items {
 			out.Items = append(out.Items, toSummary(it))
+		}
+		return ok(out)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "related_items",
+		Description: "Find items similar to the given item by embedding distance (nearest first, max 5). Returns an empty list until the item has been embedded; suggestions exclude items already linked.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in idInput) (*mcp.CallToolResult, relatedOut, error) {
+		id, err := uuid.Parse(strings.TrimSpace(in.ID))
+		if err != nil {
+			return toolErr[relatedOut]("id must be a valid uuid")
+		}
+		results, err := b.Related(ctx, uidFor(ctx), id)
+		if err != nil {
+			if isNotFound(err) {
+				return toolErr[relatedOut]("item not found")
+			}
+			return toolErr[relatedOut]("could not fetch related items: " + err.Error())
+		}
+		out := relatedOut{Results: make([]RelatedHit, 0, len(results))}
+		for _, r := range results {
+			out.Results = append(out.Results, RelatedHit{Item: toSummary(r.Item), Distance: r.Distance})
 		}
 		return ok(out)
 	})

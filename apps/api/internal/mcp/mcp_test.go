@@ -124,6 +124,16 @@ func (f *fakeBackend) GetDrift(_ context.Context, _ uuid.UUID) ([]db.Item, int, 
 	return f.items, 42, nil
 }
 
+func (f *fakeBackend) Related(_ context.Context, _ uuid.UUID, id uuid.UUID) ([]appmcp.RelatedResult, error) {
+	if f.notFound {
+		return nil, appmcp.ErrNotFound
+	}
+	return []appmcp.RelatedResult{
+		{Item: db.Item{ID: uuid.New(), Url: "https://near", Status: "enriched", CreatedAt: ts(time.Unix(0, 0))}, Distance: 0.1},
+		{Item: db.Item{ID: uuid.New(), Url: "https://far", Status: "enriched", CreatedAt: ts(time.Unix(0, 0))}, Distance: 0.4},
+	}, nil
+}
+
 // connect spins the MCP handler on an httptest server and returns a connected
 // client session that talks the real Streamable HTTP transport.
 func connect(t *testing.T, b appmcp.Backend) *sdk.ClientSession {
@@ -155,8 +165,8 @@ func TestToolsListHasSix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Tools) != 13 {
-		t.Fatalf("want 13 tools, got %d", len(res.Tools))
+	if len(res.Tools) != 14 {
+		t.Fatalf("want 14 tools, got %d", len(res.Tools))
 	}
 }
 
@@ -388,6 +398,37 @@ func TestGetDriftReadOnly(t *testing.T) {
 	}
 }
 
+func TestRelatedItemsTool(t *testing.T) {
+	fake := &fakeBackend{}
+	sess := connect(t, fake)
+
+	r := call(t, sess, "related_items", map[string]any{"id": uuid.New().String()})
+	if r.IsError {
+		t.Fatalf("unexpected error: %+v", r)
+	}
+	var out struct {
+		Results []appmcp.RelatedHit `json:"results"`
+	}
+	decode(t, r, &out)
+	if len(out.Results) != 2 {
+		t.Fatalf("expected 2 related hits, got %+v", out.Results)
+	}
+	if out.Results[0].Distance != 0.1 || out.Results[1].Distance != 0.4 {
+		t.Fatalf("unexpected distances: %+v", out.Results)
+	}
+
+	if r := call(t, sess, "related_items", map[string]any{"id": "not-a-uuid"}); !r.IsError {
+		t.Fatal("expected bad-uuid tool error")
+	}
+
+	fakeNF := &fakeBackend{notFound: true}
+	sessNF := connect(t, fakeNF)
+	r = call(t, sessNF, "related_items", map[string]any{"id": uuid.New().String()})
+	if !r.IsError || !strings.Contains(resultText(r), "item not found") {
+		t.Fatalf("expected item not found error, got %+v", r)
+	}
+}
+
 func TestListLensesMalformedRule(t *testing.T) {
 	fake := &fakeBackend{lenses: []db.Lense{{ID: uuid.New(), Name: "Bad", Rule: []byte(`{bad`)}}}
 	sess := connect(t, fake)
@@ -432,8 +473,8 @@ func TestNewServerServesSameRegistryAsHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 13 {
-		t.Fatalf("tools = %d, want 13", len(tools.Tools))
+	if len(tools.Tools) != 14 {
+		t.Fatalf("tools = %d, want 14", len(tools.Tools))
 	}
 	prompts, err := cs.ListPrompts(ctx, &sdk.ListPromptsParams{})
 	if err != nil {

@@ -53,3 +53,6 @@ export type CreateHighlightRequest =
 
 export type CreateHighlightResponse =
   paths["/items/{id}/highlights"]["post"]["responses"]["201"]["content"]["application/json"];
+
+export type RelatedItem =
+  paths["/items/{id}/related"]["get"]["responses"]["200"]["content"]["application/json"][number];

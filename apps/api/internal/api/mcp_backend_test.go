@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,6 +214,49 @@ func TestMCPBackendDeskDrift(t *testing.T) {
 	}
 	if after.LastDriftedAt.Valid {
 		t.Fatalf("GetDrift must not set last_drifted_at, but it is now valid")
+	}
+}
+
+func TestMCPBackendRelated(t *testing.T) {
+	srv, s := mcpTestDeps(t)
+	b := mcpBackend{s: srv}
+	ctx := context.Background()
+
+	src := createItem(t, s, DevUserID, "source")
+	near := createItem(t, s, DevUserID, "near")
+
+	dims := 768
+	vec := func(components ...float32) string {
+		parts := make([]string, dims)
+		for i := range parts {
+			if i < len(components) {
+				parts[i] = fmt.Sprintf("%v", components[i])
+			} else {
+				parts[i] = "0"
+			}
+		}
+		return "[" + strings.Join(parts, ",") + "]"
+	}
+	insertEmbedding := func(itemID uuid.UUID, vecLit string) {
+		_, err := s.Pool.Exec(ctx, `INSERT INTO item_embeddings (item_id, user_id, embedding) VALUES ($1, $2, $3::vector)`, itemID, DevUserID, vecLit)
+		if err != nil {
+			t.Fatalf("seeding embedding: %v", err)
+		}
+	}
+	insertEmbedding(src.ID, vec(1, 0))
+	insertEmbedding(near.ID, vec(1, 0.05))
+
+	results, err := b.Related(ctx, DevUserID, src.ID)
+	if err != nil {
+		t.Fatalf("related: %v", err)
+	}
+	if len(results) != 1 || results[0].Item.ID != near.ID {
+		t.Fatalf("related = %+v, want [%v]", results, near.ID)
+	}
+
+	otherUID := uuid.MustParse("00000000-0000-0000-0000-0000000000ff")
+	if _, err := b.Related(ctx, otherUID, src.ID); !errors.Is(err, appmcp.ErrNotFound) {
+		t.Fatalf("cross-tenant related err = %v, want ErrNotFound", err)
 	}
 }
 

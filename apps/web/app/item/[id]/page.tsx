@@ -2,8 +2,8 @@ import { tokens } from "@openmind/ui";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { CSSProperties, ReactNode } from "react";
-import { LinkedSection } from "../../../components/LinkedSection";
 import { Palette } from "../../../components/Palette";
+import { RailLinks } from "../../../components/RailLinks";
 import { apiFetch } from "../../../lib/api";
 import { assetSrc } from "../../../lib/assets";
 import { cardKind, domainOf, typeGradient, typeLabel } from "../../../lib/cards";
@@ -220,7 +220,7 @@ function Rail({ item }: { item: ItemDetail }) {
       {divider}
       <TagEditor itemId={item.id} userTags={item.userTags ?? []} />
       {divider}
-      <LinkedSection itemId={item.id} />
+      <RailLinks itemId={item.id} />
       {divider}
       <p
         className="meta"

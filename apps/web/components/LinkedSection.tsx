@@ -65,43 +65,75 @@ const addToggle: CSSProperties = {
   cursor: "pointer",
 };
 
+const retryPill: CSSProperties = {
+  display: "block",
+  font: `500 11px/1 ${font.mono}`,
+  letterSpacing: ".02em",
+  color: color.inkFaint,
+  background: "none",
+  border: `1px solid ${color.hairline}`,
+  borderRadius: 20,
+  padding: "6px 12px",
+  cursor: "pointer",
+  marginTop: 9,
+};
+
 /** Best label for a linked item: title, else the domain, else the raw URL. */
 function labelFor(item: Item): string {
   return item.title || domainOf(item.url) || item.url;
 }
 
-export function LinkedSection({ itemId }: { itemId: string }) {
+export function LinkedSection({ itemId, version = 0 }: { itemId: string; version?: number }) {
   const router = useRouter();
   const [links, setLinks] = useState<Item[] | null>(null);
+  const [linksLoadFailed, setLinksLoadFailed] = useState(false);
+  const [linksLoadAttempt, setLinksLoadAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [candidates, setCandidates] = useState<Item[] | null>(null);
+  const [candidatesLoadFailed, setCandidatesLoadFailed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setLinksLoadFailed(false);
     fetch(`/api/items/${itemId}/links`)
-      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
-      .then((data: Item[]) => {
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`failed to load links: ${res.status}`);
+        return (await res.json()) as Item[];
+      })
+      .then((data) => {
         if (!cancelled) setLinks(data);
       })
-      .catch(() => {
-        if (!cancelled) setLinks([]);
+      .catch((err) => {
+        console.error("failed to load links", { itemId, err });
+        if (!cancelled) setLinksLoadFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [itemId]);
+  }, [itemId, version, linksLoadAttempt]);
+
+  function loadCandidates() {
+    setCandidatesLoadFailed(false);
+    fetch("/api/items?limit=50")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`failed to load candidates: ${res.status}`);
+        return (await res.json()) as Item[];
+      })
+      .then((data) => setCandidates(data))
+      .catch((err) => {
+        console.error("failed to load link candidates", { itemId, err });
+        setCandidatesLoadFailed(true);
+      });
+  }
 
   function openPicker() {
     setPickerOpen(true);
     setQuery("");
-    if (candidates === null) {
-      fetch("/api/items?limit=50")
-        .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
-        .then((data: Item[]) => setCandidates(data))
-        .catch(() => setCandidates([]));
+    if (candidates === null && !candidatesLoadFailed) {
+      loadCandidates();
     }
     setTimeout(() => inputRef.current?.focus(), 0);
   }
@@ -161,7 +193,11 @@ export function LinkedSection({ itemId }: { itemId: string }) {
         </button>
       </div>
 
-      {links === null ? null : links.length === 0 && !pickerOpen ? (
+      {linksLoadFailed ? (
+        <button type="button" onClick={() => setLinksLoadAttempt((n) => n + 1)} style={retryPill}>
+          Couldn&apos;t load links — retry
+        </button>
+      ) : links === null ? null : links.length === 0 && !pickerOpen ? (
         <p
           className="meta"
           style={{ color: color.inkFaint, textTransform: "none", letterSpacing: ".02em", margin: "9px 0 0" }}
@@ -211,7 +247,11 @@ export function LinkedSection({ itemId }: { itemId: string }) {
             }}
           />
           <div style={{ marginTop: 6, maxHeight: 220, overflowY: "auto" }}>
-            {candidates === null ? (
+            {candidatesLoadFailed ? (
+              <button type="button" onClick={loadCandidates} style={{ ...retryPill, margin: "8px 0 0" }}>
+                Couldn&apos;t load suggestions — retry
+              </button>
+            ) : candidates === null ? (
               <p className="meta" style={{ color: color.inkFaint, margin: "8px 0 0" }}>
                 Loading…
               </p>
