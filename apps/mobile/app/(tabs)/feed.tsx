@@ -47,6 +47,7 @@ export default function FeedScreen() {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [refreshing, setRefreshing] = useState(false);
   const [pendingKeepIds, setPendingKeepIds] = useState<Set<string>>(new Set());
+  const [keepError, setKeepError] = useState<"rejected" | "error" | null>(null);
 
   const load = useCallback(
     async (isRefresh: boolean) => {
@@ -76,6 +77,7 @@ export default function FeedScreen() {
 
   const onToggleKeep = useCallback(async (item: Item) => {
     const nextKept = !item.keptAt;
+    setKeepError(null);
     setPendingKeepIds((prev) => new Set(prev).add(item.id));
     const res = await setKept(item.id, nextKept);
     setPendingKeepIds((prev) => {
@@ -83,7 +85,10 @@ export default function FeedScreen() {
       next.delete(item.id);
       return next;
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      setKeepError(res.status === 401 ? "rejected" : "error");
+      return;
+    }
     setState((prev) => {
       if (prev.kind !== "ready") return prev;
       return {
@@ -108,6 +113,13 @@ export default function FeedScreen() {
         <Text style={styles.subtitle}>
           {count} {count === 1 ? "item" : "items"} · from your subscribed feeds
         </Text>
+        {keepError ? (
+          <Text style={styles.keepErrorText}>
+            {keepError === "rejected"
+              ? "Token rejected — check Settings."
+              : "Couldn't update — try again."}
+          </Text>
+        ) : null}
       </View>
       <Body
         state={state}
@@ -293,5 +305,11 @@ const styles = StyleSheet.create({
   keepButtonActive: { backgroundColor: colors.cobalt },
   keepButtonPressed: { opacity: 0.7 },
   keepButtonText: { fontFamily: fonts.sansMedium, fontSize: 12.5, color: colors.cobalt },
+  keepErrorText: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.danger,
+    marginTop: spacing.sm,
+  },
   keepButtonTextActive: { color: colors.paper },
 });
