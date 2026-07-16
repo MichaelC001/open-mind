@@ -193,3 +193,56 @@ export async function getItem(
     return { ok: false, status: 0 };
   }
 }
+
+/** Subset of OpenAPI UnderstoodQuery — what parse=true returns alongside hits. */
+export type UnderstoodQuery = {
+  text?: string;
+  color?: string;
+  types?: string[];
+};
+
+export type SearchHit = { item: Item; score: number };
+
+/**
+ * Hybrid search via GET {instanceUrl}/api/search. Pass parse=true to match the
+ * web app (NL → text + colour + types when an AI provider is configured).
+ */
+export async function searchItems(
+  params: { q?: string; color?: string; parse?: boolean },
+  override?: Settings,
+): Promise<{
+  ok: boolean;
+  status: number;
+  results: SearchHit[];
+  understood?: UnderstoodQuery;
+}> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0, results: [] };
+  const qs = new URLSearchParams();
+  if (params.q) qs.set("q", params.q);
+  if (params.color) qs.set("color", params.color);
+  if (params.parse) qs.set("parse", "true");
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/search?${qs.toString()}`, {
+      method: "GET",
+      headers: authHeaders(settings.token),
+    });
+    let results: SearchHit[] = [];
+    let understood: UnderstoodQuery | undefined;
+    if (res.ok) {
+      try {
+        const data = (await res.json()) as {
+          results?: SearchHit[];
+          understood?: UnderstoodQuery;
+        };
+        if (Array.isArray(data.results)) results = data.results;
+        if (data.understood) understood = data.understood;
+      } catch {
+        results = [];
+      }
+    }
+    return { ok: res.ok, status: res.status, results, understood };
+  } catch {
+    return { ok: false, status: 0, results: [] };
+  }
+}

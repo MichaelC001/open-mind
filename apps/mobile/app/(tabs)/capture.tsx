@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Link, useLocalSearchParams } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { Link, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PressScale } from "@/components/PressScale";
 import { listItems, saveItem } from "@/lib/api";
+import { useCaptureQueue } from "@/lib/capture-queue-context";
 import { useSettingsContext } from "@/lib/settings-context";
 import { colors, fonts, radius, spacing } from "@/lib/theme";
 
@@ -24,9 +25,8 @@ type Status =
   | { kind: "idle" }
   | { kind: "saving" }
   | { kind: "saved"; recovered?: boolean }
+  | { kind: "queued" }
   | { kind: "rejected" }
-  | { kind: "unreachable" }
-  | { kind: "unreachable-note" }
   | { kind: "error" };
 
 // After a status-0 (network error/timeout) response, the POST may have
@@ -48,6 +48,7 @@ async function wasRecentlySaved(url: string, attemptStartedAt: number): Promise<
 
 export default function CaptureScreen() {
   const { configured, loading } = useSettingsContext();
+  const { pendingCount, flushing, enqueue, flush } = useCaptureQueue();
   const params = useLocalSearchParams<{ shared?: string }>();
   const [text, setText] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -64,6 +65,12 @@ export default function CaptureScreen() {
       setStatus({ kind: "idle" });
     }
   }, [params.shared]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void flush();
+    }, [flush]),
+  );
 
   const trimmed = text.trim();
   const isUrl = URL_RE.test(trimmed);
@@ -86,11 +93,21 @@ export default function CaptureScreen() {
         setStatus({ kind: "saved", recovered: true });
         return;
       }
-      setStatus({ kind: url ? "unreachable" : "unreachable-note" });
+      // Durable offline queue — clear the field so the user can keep capturing.
+      await enqueue(url ? { url: value } : { note: value });
+      setText("");
+      setStatus({ kind: "queued" });
     } else if (res.status === 401) {
       setStatus({ kind: "rejected" });
     } else {
       setStatus({ kind: "error" });
+    }
+  }
+
+  async function onSyncNow() {
+    const result = await flush();
+    if (result.sent > 0 && result.remaining === 0) {
+      setStatus({ kind: "saved" });
     }
   }
 
@@ -106,6 +123,23 @@ export default function CaptureScreen() {
 
           {loading ? null : configured ? (
             <>
+              {pendingCount > 0 ? (
+                <View style={styles.pendingStrip}>
+                  <Text style={styles.pendingText}>
+                    {pendingCount} waiting to sync
+                  </Text>
+                  <PressScale onPress={onSyncNow} disabled={flushing}>
+                    <View style={[styles.syncButton, flushing && styles.buttonDisabled]}>
+                      {flushing ? (
+                        <ActivityIndicator color={colors.cobalt} size="small" />
+                      ) : (
+                        <Text style={styles.syncButtonText}>Sync now</Text>
+                      )}
+                    </View>
+                  </PressScale>
+                </View>
+              ) : null}
+
               <View style={styles.field}>
                 <Text style={styles.label}>{isUrl ? "LINK" : "URL OR NOTE"}</Text>
                 <View style={styles.inputCard}>
@@ -169,20 +203,17 @@ function StatusMessage({ status }: { status: Status }) {
           </Text>
         </View>
       );
+    case "queued":
+      return (
+        <View style={styles.savedRow}>
+          <Ionicons name="cloud-upload-outline" size={16} color={colors.inkMuted} />
+          <Text style={[styles.status, { color: colors.inkMuted }]}>
+            Queued — will sync when you’re back online.
+          </Text>
+        </View>
+      );
     case "rejected":
       return <Text style={[styles.status, { color: colors.danger }]}>Token rejected — check Settings.</Text>;
-    case "unreachable":
-      return (
-        <Text style={[styles.status, { color: colors.danger }]}>
-          Instance unreachable — check your connection.
-        </Text>
-      );
-    case "unreachable-note":
-      return (
-        <Text style={[styles.status, { color: colors.danger }]}>
-          Connection problem — the note may or may not have saved. Check your Library before retrying.
-        </Text>
-      );
     case "error":
       return <Text style={[styles.status, { color: colors.danger }]}>Couldn't save — try again.</Text>;
     default:
@@ -202,6 +233,30 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
     marginBottom: spacing.xl,
   },
+  pendingStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+    backgroundColor: colors.paper,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.card,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  pendingText: { fontFamily: fonts.sansMedium, fontSize: 13, color: colors.inkMuted, flex: 1 },
+  syncButton: {
+    borderWidth: 1,
+    borderColor: colors.cobalt,
+    borderRadius: radius.button,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+    minWidth: 84,
+    alignItems: "center",
+  },
+  syncButtonText: { fontFamily: fonts.sansSemiBold, fontSize: 13, color: colors.cobalt },
   field: { marginBottom: spacing.lg },
   label: {
     fontFamily: fonts.monoMedium,
@@ -230,7 +285,7 @@ const styles = StyleSheet.create({
   },
   inputFocused: { borderColor: colors.cobalt, borderWidth: 1.5 },
   savedRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginBottom: spacing.md },
-  status: { fontFamily: fonts.sans, fontSize: 13, marginBottom: spacing.md },
+  status: { fontFamily: fonts.sans, fontSize: 13, marginBottom: spacing.md, flexShrink: 1 },
   primaryButton: {
     backgroundColor: colors.cobalt,
     borderRadius: radius.button,
@@ -239,7 +294,6 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   primaryButtonText: { color: colors.paper, fontFamily: fonts.sansSemiBold, fontSize: 15 },
-  buttonPressed: { opacity: 0.7 },
   buttonDisabled: { opacity: 0.4 },
   placeholder: {
     marginTop: spacing.xl,
