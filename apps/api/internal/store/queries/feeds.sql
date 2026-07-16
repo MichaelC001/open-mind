@@ -14,6 +14,12 @@ DELETE FROM feeds WHERE user_id = $1 AND id = $2;
 UPDATE feeds SET last_polled_at = $3, last_status = $4, etag = $5, last_modified = $6
 WHERE user_id = $1 AND id = $2;
 
+-- name: KeepFeedItems :execrows
+-- Unsubscribing keeps the feed's items in the library: stamp everything
+-- still unkept so the Mind predicate keeps showing them once feed_id nulls.
+UPDATE items SET kept_at = now(), updated_at = now()
+WHERE user_id = $1 AND feed_id = $2 AND kept_at IS NULL;
+
 -- name: ListFeedsDue :many
 -- Cross-user by design: the periodic poller runs system-wide, refreshing every
 -- feed whose last poll is null or older than the cutoff. Items it saves are

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/rohithgilla12/openmind/api/internal/feeds"
@@ -65,10 +66,29 @@ func (s *Server) ListFeeds(w http.ResponseWriter, r *http.Request) {
 
 // DeleteFeed unsubscribes the caller from a feed and returns 204. A delete that
 // affects no rows (unknown id or another user's feed) returns 404. Already
-// imported items are kept; only polling stops.
+// imported items are kept; only polling stops: every still-unkept item from
+// this feed is stamped kept_at = now before the feed row (and its FK) go away,
+// so nothing silently drops out of the library once feed_id is nulled. This
+// two-step (stamp then delete) is fail-safe if it partially applies: an abort
+// happens before the delete call, so a run that stamps items kept but then
+// fails on delete just leaves the items kept and the feed row intact — safe to
+// retry, no dropped or duplicated items.
 func (s *Server) DeleteFeed(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	ctx := r.Context()
-	rows, err := s.feeds.Store.Queries.DeleteFeed(ctx, db.DeleteFeedParams{UserID: userID(ctx), ID: id})
+	uid := userID(ctx)
+	kept, err := s.feeds.Store.Queries.KeepFeedItems(ctx, db.KeepFeedItemsParams{
+		UserID: uid,
+		FeedID: pgtype.UUID{Bytes: id, Valid: true},
+	})
+	if err != nil {
+		slog.Error("keeping feed items before unsubscribe", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not delete feed")
+		return
+	}
+	if kept > 0 {
+		slog.Info("stamped feed items kept on unsubscribe", "feed_id", id, "count", kept)
+	}
+	rows, err := s.feeds.Store.Queries.DeleteFeed(ctx, db.DeleteFeedParams{UserID: uid, ID: id})
 	if err != nil {
 		slog.Error("deleting feed", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not delete feed")

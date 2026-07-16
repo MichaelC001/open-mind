@@ -417,6 +417,18 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Item" }
+  /feed:
+    get:
+      operationId: getFeedItems
+      parameters:
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: feedId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: feed-originated items, newest first
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Item" } }
   /drift:
     get:
       operationId: getDrift
@@ -580,6 +592,8 @@ components:
         createdAt: { type: string, format: date-time }
         pinnedAt: { type: string, format: date-time, nullable: true, description: "When the item was pinned to the Desk; null if not pinned." }
         pageCount: { type: integer, nullable: true, description: "Page count when the item's original is a stored PDF; null otherwise." }
+        feedId: { type: string, format: uuid, nullable: true, description: "The feed this item originated from; null if not feed-sourced." }
+        keptAt: { type: string, format: date-time, nullable: true, description: "When the item was kept in the library from its feed; null if not kept." }
     ItemDetail:
       allOf:
         - $ref: "#/components/schemas/Item"
@@ -625,6 +639,7 @@ components:
       properties:
         userTags: { type: array, items: { type: string }, description: "Full replacement user-tags list. An empty array clears all user tags." }
         pinned: { type: boolean, description: "Pin (true) or unpin (false) the item on the Desk. Pinning sets pinnedAt to now; unpinning clears it." }
+        kept: { type: boolean, description: "Keep (true) the item in the library independent of its feed. Sets keptAt to now." }
     DriftResponse:
       type: object
       required: [items, total]

@@ -20,6 +20,7 @@ export type Item = {
   leadImageUrl?: string;
   tags?: string[];
   userTags?: string[];
+  keptAt?: string | null;
 };
 
 async function resolveSettings(override?: Settings): Promise<Settings | null> {
@@ -162,6 +163,79 @@ export async function listItems(
     return { ok: res.ok, status: res.status, items };
   } catch {
     return { ok: false, status: 0, items: [] };
+  }
+}
+
+/**
+ * List feed-originated items via GET {instanceUrl}/api/feed?limit=. Returns an
+ * array of items (empty on error), newest first.
+ */
+export async function listFeedItems(
+  limit = 50,
+  override?: Settings,
+): Promise<{ ok: boolean; status: number; items: Item[] }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0, items: [] };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/feed?limit=${limit}`, {
+      method: "GET",
+      headers: authHeaders(settings.token),
+    });
+    if (res.ok) {
+      try {
+        const data = (await res.json()) as unknown;
+        let items: Item[] = [];
+        if (Array.isArray(data)) {
+          items = data as Item[];
+        } else if (data && Array.isArray((data as { items?: Item[] }).items)) {
+          items = (data as { items: Item[] }).items;
+        }
+        return { ok: true, status: res.status, items };
+      } catch (err) {
+        // A 200 with unparseable JSON is a real failure, not an empty feed:
+        // surface it as an error so the UI shows "Couldn't load your feed"
+        // instead of silently coercing to an empty, seemingly-healthy list.
+        console.error(err);
+        return { ok: false, status: res.status, items: [] };
+      }
+    }
+    return { ok: false, status: res.status, items: [] };
+  } catch (err) {
+    console.error(err);
+    return { ok: false, status: 0, items: [] };
+  }
+}
+
+/**
+ * Set an item's kept state via PATCH {instanceUrl}/api/items/{id} {kept}.
+ * Keeping pins the feed item into the library independent of its feed;
+ * passing false unkeeps it again.
+ */
+export async function setKept(
+  itemId: string,
+  kept: boolean,
+  override?: Settings,
+): Promise<{ ok: boolean; status: number; item?: Item }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0 };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/items/${itemId}`, {
+      method: "PATCH",
+      headers: authHeaders(settings.token, true),
+      body: JSON.stringify({ kept }),
+    });
+    let item: Item | undefined;
+    if (res.ok) {
+      try {
+        item = (await res.json()) as Item;
+      } catch {
+        item = undefined;
+      }
+    }
+    return { ok: res.ok, status: res.status, item };
+  } catch (err) {
+    console.error(err);
+    return { ok: false, status: 0 };
   }
 }
 

@@ -38,6 +38,7 @@ func TestGuardedPredicate(t *testing.T) {
 		{http.MethodGet, "/items/3f1a2b4c-0000-0000-0000-000000000000/highlights", false},
 		{http.MethodPatch, "/settings", true},
 		{http.MethodGet, "/settings", false},
+		{http.MethodGet, "/feed", true},
 	}
 	for _, c := range cases {
 		if got := guarded(c.method, c.path); got != c.want {

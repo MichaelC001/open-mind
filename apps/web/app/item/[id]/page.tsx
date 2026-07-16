@@ -8,7 +8,9 @@ import { apiFetch } from "../../../lib/api";
 import { assetSrc } from "../../../lib/assets";
 import { cardKind, domainOf, typeGradient, typeLabel } from "../../../lib/cards";
 import { derivedPalette } from "../../../lib/palette";
+import { relativeTime } from "../../../lib/relative-time";
 import type { ItemDetail } from "../../../lib/types";
+import { KeepButton } from "../../../components/KeepButton";
 import { KindleButton } from "../../../components/KindleButton";
 import { PinButton } from "../../../components/PinButton";
 import { DeleteButton } from "./DeleteButton";
@@ -214,6 +216,28 @@ function Rail({ item }: { item: ItemDetail }) {
                 {t}
               </span>
             ))}
+          </div>
+        </>
+      ) : null}
+      {item.feedId ? (
+        <>
+          {divider}
+          <div className="meta" style={{ color: color.inkFaintAlt }}>
+            Provenance
+          </div>
+          <p
+            style={{
+              fontFamily: font.sans,
+              fontSize: 13,
+              lineHeight: 1.5,
+              color: color.inkMuted,
+              margin: "9px 0 0",
+            }}
+          >
+            From your feeds · {item.keptAt ? `kept ${relativeTime(item.keptAt)}` : "not kept"}
+          </p>
+          <div style={{ marginTop: 10 }}>
+            <KeepButton itemId={item.id} kept={!!item.keptAt} />
           </div>
         </>
       ) : null}

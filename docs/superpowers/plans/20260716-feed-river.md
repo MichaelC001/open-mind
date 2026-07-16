@@ -159,6 +159,18 @@ UPDATE items SET feed_id = $3 WHERE user_id = $1 AND id = ANY($2::uuid[]) AND fe
 
 ---
 
+### Task 4b: Mobile — Feed tab
+
+**Files:**
+- Modify: `apps/mobile/app/(tabs)/` — add a **Feed** tab beside Library/Capture/Settings (read `_layout.tsx` + the Library tab first and mirror its structure/styling exactly; mobile is a standalone Expo app with its own lockfile, NOT in the pnpm workspace).
+- Modify: `apps/mobile/lib/api.ts` (or equivalent) — add `listFeedItems(limit?)` hitting `GET {instance}/api/feed` with the stored Bearer, and `setKept(itemId, kept)` via the items PATCH, following the file's existing fetch conventions.
+
+Notes: the Library tab needs NO change (server-side Mind predicate applies). The Feed tab: reverse-chron list (title, summary snippet, relative time), pull-to-refresh, a Keep action per row (kept state reflected), empty state pointing at the web /feeds page for subscribing. Requires a web proxy for /feed? NO — mobile talks to `/api/*` through the web ingress; Task 4's `apps/web/app/api/feed/route.ts` proxy already covers it (verify it forwards Bearer like the other /api routes — mobile uses Bearer, not cookies; read how apps/web/app/api/items/route.ts handles the Authorization header and match).
+
+Verify: `npx tsc --noEmit` in apps/mobile (or `./node_modules/.bin/tsc`) + `npx expo export --platform web` builds. Commit: `feat(mobile): feed tab with keep`.
+
+---
+
 ### Task 5: E2e + docs + prod cleanup script
 
 - [ ] **Step 1: Compose e2e** (python3 urllib; rebuild api+web): subscribe the HN fixture (`news.ycombinator.com/rss`) → items appear in `GET /feed`, NOT in `GET /items`; keep one via PATCH → appears in `GET /items`; unkeep → gone; POST /items with an unkept feed item's URL → promotes (same id, keptAt set); DELETE the feed → its items now all in `GET /items` with keptAt; drift excludes unkept (enriched feed item not in GET /drift). Unsubscribe cleanup at the end.

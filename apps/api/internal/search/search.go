@@ -168,7 +168,10 @@ func RunLensRule(ctx context.Context, s *store.Store, p ai.Provider, userID uuid
 	if q != "" || color != "" {
 		return Run(ctx, s, p, userID, q, color, types, ruleResultLimit)
 	}
-	items, err := s.Queries.ListItems(ctx, db.ListItemsParams{UserID: userID, Limit: ruleListCap})
+	// ListItemsAll (not ListItems): lens rules deliberately span the feed
+	// river, so a types-only rule includes unkept feed items just like the
+	// text/colour path above (which runs through search and sees everything).
+	items, err := s.Queries.ListItemsAll(ctx, db.ListItemsAllParams{UserID: userID, Limit: ruleListCap})
 	if err != nil {
 		return nil, err
 	}

@@ -90,6 +90,26 @@ func (q *Queries) GetFeed(ctx context.Context, arg GetFeedParams) (Feed, error) 
 	return i, err
 }
 
+const keepFeedItems = `-- name: KeepFeedItems :execrows
+UPDATE items SET kept_at = now(), updated_at = now()
+WHERE user_id = $1 AND feed_id = $2 AND kept_at IS NULL
+`
+
+type KeepFeedItemsParams struct {
+	UserID uuid.UUID
+	FeedID pgtype.UUID
+}
+
+// Unsubscribing keeps the feed's items in the library: stamp everything
+// still unkept so the Mind predicate keeps showing them once feed_id nulls.
+func (q *Queries) KeepFeedItems(ctx context.Context, arg KeepFeedItemsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, keepFeedItems, arg.UserID, arg.FeedID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const listFeeds = `-- name: ListFeeds :many
 SELECT id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified FROM feeds WHERE user_id = $1 ORDER BY created_at DESC
 `

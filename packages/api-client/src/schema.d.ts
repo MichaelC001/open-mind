@@ -346,6 +346,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getFeedItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/drift": {
         parameters: {
             query?: never;
@@ -516,6 +532,16 @@ export interface components {
             pinnedAt?: string | null;
             /** @description Page count when the item's original is a stored PDF; null otherwise. */
             pageCount?: number | null;
+            /**
+             * Format: uuid
+             * @description The feed this item originated from; null if not feed-sourced.
+             */
+            feedId?: string | null;
+            /**
+             * Format: date-time
+             * @description When the item was kept in the library from its feed; null if not kept.
+             */
+            keptAt?: string | null;
         };
         ItemDetail: components["schemas"]["Item"] & {
             body: string;
@@ -555,6 +581,8 @@ export interface components {
             userTags?: string[];
             /** @description Pin (true) or unpin (false) the item on the Desk. Pinning sets pinnedAt to now; unpinning clears it. */
             pinned?: boolean;
+            /** @description Keep (true) the item in the library independent of its feed. Sets keptAt to now. */
+            kept?: boolean;
         };
         DriftResponse: {
             items: components["schemas"]["Item"][];
@@ -1610,6 +1638,29 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description pinned items */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Item"][];
+                };
+            };
+        };
+    };
+    getFeedItems: {
+        parameters: {
+            query?: {
+                limit?: number;
+                feedId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description feed-originated items, newest first */
             200: {
                 headers: {
                     [name: string]: unknown;

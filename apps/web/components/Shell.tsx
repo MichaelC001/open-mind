@@ -23,14 +23,16 @@ export async function Shell({
   activeLensId,
   activeDesk,
   activeDrift,
+  activeFeed,
 }: {
   children: ReactNode;
   activeLensId?: string;
   activeDesk?: boolean;
   activeDrift?: boolean;
+  activeFeed?: boolean;
 }) {
   const lenses = await getLenses();
-  const mindActive = !activeLensId && !activeDesk && !activeDrift;
+  const mindActive = !activeLensId && !activeDesk && !activeDrift && !activeFeed;
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
       <aside
@@ -96,6 +98,32 @@ export async function Shell({
           </span>
         </div>
 
+        {/* The Mind — the home library. Active unless viewing a lens, feed, drift or the desk. */}
+        <Link
+          href="/"
+          style={{
+            ...navBase,
+            textDecoration: "none",
+            background: mindActive ? "rgba(27,63,209,.1)" : "transparent",
+            color: mindActive ? tokens.color.cobalt : tokens.color.ink,
+          }}
+        >
+          <span style={{ fontSize: 15, width: 16 }}>◧</span> The Mind
+        </Link>
+
+        {/* Feed — the reverse-chron river of everything your subscriptions brought in. */}
+        <Link
+          href="/feed"
+          style={{
+            ...navBase,
+            textDecoration: "none",
+            background: activeFeed ? "rgba(27,63,209,.1)" : "transparent",
+            color: activeFeed ? tokens.color.cobalt : tokens.color.ink,
+          }}
+        >
+          <span style={{ fontSize: 15, width: 16 }}>≋</span> Feed
+        </Link>
+
         {/* Desk — the pinboard of what you're working with. */}
         <Link
           href="/desk"
@@ -107,19 +135,6 @@ export async function Shell({
           }}
         >
           <span style={{ fontSize: 15, width: 16 }}>◵</span> Desk
-        </Link>
-
-        {/* The Mind — the home library. Active unless viewing a lens or the desk. */}
-        <Link
-          href="/"
-          style={{
-            ...navBase,
-            textDecoration: "none",
-            background: mindActive ? "rgba(27,63,209,.1)" : "transparent",
-            color: mindActive ? tokens.color.cobalt : tokens.color.ink,
-          }}
-        >
-          <span style={{ fontSize: 15, width: 16 }}>◧</span> The Mind
         </Link>
 
         {/* Drift — calm, finite resurfacing of forgotten saves. */}

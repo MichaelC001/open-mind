@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 	"github.com/riverqueue/river"
 	"golang.org/x/time/rate"
@@ -103,6 +105,47 @@ func (s *Server) capture(ctx context.Context, uid uuid.UUID, url, note string) (
 	if url != "" {
 		if !validURL(url) {
 			return db.Item{}, fmt.Errorf("url must be a valid http(s) URL")
+		}
+		// Promote-on-save: if the URL already exists as an unkept feed item, keep
+		// it rather than inserting a duplicate row. This is the path by which a
+		// feed-sourced item a user actively re-saves graduates into the library
+		// proper; it's already been (or will be) enriched via the feed's own
+		// pipeline run, so no fresh enrichment job is enqueued here. A URL that's
+		// already kept, already non-feed, or belongs to another feed item falls
+		// through to today's plain insert.
+		if existing, err := s.store.Queries.GetItemByURL(ctx, db.GetItemByURLParams{UserID: uid, Url: url}); err == nil {
+			if existing.FeedID.Valid && !existing.KeptAt.Valid {
+				rows, err := s.store.Queries.SetItemKept(ctx, db.SetItemKeptParams{
+					UserID: uid,
+					ID:     existing.ID,
+					KeptAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+				})
+				if err != nil {
+					return db.Item{}, fmt.Errorf("creating item: %w", err)
+				}
+				if rows > 0 {
+					item, err := s.store.Queries.GetItem(ctx, db.GetItemParams{UserID: uid, ID: existing.ID})
+					if err != nil {
+						return db.Item{}, fmt.Errorf("creating item: %w", err)
+					}
+					return item, nil
+				}
+				// rows == 0 means someone else's concurrent keep won the race between
+				// our SetItemKept call and theirs: the item is already kept by the
+				// time we looked, so re-fetch and return it rather than falling
+				// through to a duplicate insert. Only a genuine not-found (the item
+				// vanished entirely) falls through to the plain insert path below.
+				item, err := s.store.Queries.GetItem(ctx, db.GetItemParams{UserID: uid, ID: existing.ID})
+				if err == nil {
+					slog.Warn("promote race: item already kept", "user_id", uid, "item_id", existing.ID)
+					return item, nil
+				}
+				if !errors.Is(err, pgx.ErrNoRows) {
+					return db.Item{}, fmt.Errorf("creating item: %w", err)
+				}
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return db.Item{}, fmt.Errorf("creating item: %w", err)
 		}
 		params.Url = url
 	} else {
@@ -376,6 +419,16 @@ func toAPIItem(it db.Item) Item {
 		pageCount := int(it.PageCount.Int32)
 		out.PageCount = &pageCount
 	}
+	// feedId is null unless the item originated from a feed.
+	if it.FeedID.Valid {
+		feedID := openapi_types.UUID(it.FeedID.Bytes)
+		out.FeedId = &feedID
+	}
+	// keptAt is null unless the item has been explicitly kept from its feed.
+	if it.KeptAt.Valid {
+		keptAt := it.KeptAt.Time
+		out.KeptAt = &keptAt
+	}
 	return out
 }
 
@@ -397,6 +450,8 @@ func toAPIItemDetail(it db.Item) ItemDetail {
 		Palette:      base.Palette,
 		PinnedAt:     base.PinnedAt,
 		PageCount:    base.PageCount,
+		FeedId:       base.FeedId,
+		KeptAt:       base.KeptAt,
 		Body:         it.Body,
 	}
 	if base.CardType != nil {

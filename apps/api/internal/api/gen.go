@@ -234,10 +234,16 @@ type ImportResult struct {
 
 // Item defines model for Item.
 type Item struct {
-	CardType     *ItemCardType      `json:"cardType,omitempty"`
-	CreatedAt    time.Time          `json:"createdAt"`
-	Id           openapi_types.UUID `json:"id"`
-	LeadImageUrl *string            `json:"leadImageUrl,omitempty"`
+	CardType  *ItemCardType `json:"cardType,omitempty"`
+	CreatedAt time.Time     `json:"createdAt"`
+
+	// FeedId The feed this item originated from; null if not feed-sourced.
+	FeedId *openapi_types.UUID `json:"feedId"`
+	Id     openapi_types.UUID  `json:"id"`
+
+	// KeptAt When the item was kept in the library from its feed; null if not kept.
+	KeptAt       *time.Time `json:"keptAt"`
+	LeadImageUrl *string    `json:"leadImageUrl,omitempty"`
 
 	// PageCount Page count when the item's original is a stored PDF; null otherwise.
 	PageCount *int      `json:"pageCount"`
@@ -261,11 +267,17 @@ type ItemStatus string
 
 // ItemDetail defines model for ItemDetail.
 type ItemDetail struct {
-	Body         string              `json:"body"`
-	CardType     *ItemDetailCardType `json:"cardType,omitempty"`
-	CreatedAt    time.Time           `json:"createdAt"`
-	Id           openapi_types.UUID  `json:"id"`
-	LeadImageUrl *string             `json:"leadImageUrl,omitempty"`
+	Body      string              `json:"body"`
+	CardType  *ItemDetailCardType `json:"cardType,omitempty"`
+	CreatedAt time.Time           `json:"createdAt"`
+
+	// FeedId The feed this item originated from; null if not feed-sourced.
+	FeedId *openapi_types.UUID `json:"feedId"`
+	Id     openapi_types.UUID  `json:"id"`
+
+	// KeptAt When the item was kept in the library from its feed; null if not kept.
+	KeptAt       *time.Time `json:"keptAt"`
+	LeadImageUrl *string    `json:"leadImageUrl,omitempty"`
 
 	// PageCount Page count when the item's original is a stored PDF; null otherwise.
 	PageCount *int      `json:"pageCount"`
@@ -366,6 +378,9 @@ type UnderstoodQueryTypes string
 
 // UpdateItemRequest Fields to update on an item. Both userTags and pinned are optional; omit both for a no-op edit that is rejected as a bad request.
 type UpdateItemRequest struct {
+	// Kept Keep (true) the item in the library independent of its feed. Sets keptAt to now.
+	Kept *bool `json:"kept,omitempty"`
+
 	// Pinned Pin (true) or unpin (false) the item on the Desk. Pinning sets pinnedAt to now; unpinning clears it.
 	Pinned *bool `json:"pinned,omitempty"`
 
@@ -376,6 +391,12 @@ type UpdateItemRequest struct {
 // CreateAssetMultipartBody defines parameters for CreateAsset.
 type CreateAssetMultipartBody struct {
 	File openapi_types.File `json:"file"`
+}
+
+// GetFeedItemsParams defines parameters for GetFeedItems.
+type GetFeedItemsParams struct {
+	Limit  *int                `form:"limit,omitempty" json:"limit,omitempty"`
+	FeedId *openapi_types.UUID `form:"feedId,omitempty" json:"feedId,omitempty"`
 }
 
 // ImportItemsMultipartBody defines parameters for ImportItems.
@@ -481,6 +502,9 @@ type ServerInterface interface {
 
 	// (GET /export)
 	ExportItems(w http.ResponseWriter, r *http.Request)
+
+	// (GET /feed)
+	GetFeedItems(w http.ResponseWriter, r *http.Request, params GetFeedItemsParams)
 
 	// (GET /feeds)
 	ListFeeds(w http.ResponseWriter, r *http.Request)
@@ -623,6 +647,11 @@ func (_ Unimplemented) DriftItem(w http.ResponseWriter, r *http.Request, id open
 
 // (GET /export)
 func (_ Unimplemented) ExportItems(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (GET /feed)
+func (_ Unimplemented) GetFeedItems(w http.ResponseWriter, r *http.Request, params GetFeedItemsParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1018,6 +1047,47 @@ func (siw *ServerInterfaceWrapper) ExportItems(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ExportItems(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetFeedItems operation middleware
+func (siw *ServerInterfaceWrapper) GetFeedItems(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetFeedItemsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "limit", r.URL.Query(), &params.Limit)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "feedId" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "feedId", r.URL.Query(), &params.FeedId)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "feedId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetFeedItems(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1964,6 +2034,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/export", wrapper.ExportItems)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/feed", wrapper.GetFeedItems)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/feeds", wrapper.ListFeeds)
