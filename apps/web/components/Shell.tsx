@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { tokens } from "@openmind/ui";
 import { getLenses } from "../lib/lenses";
+import { formatBytes, getMe } from "../lib/me";
+import { MobileNav } from "./MobileNav";
 import { lensDot } from "../lib/lens-format";
 
 const navBase = {
@@ -23,34 +25,32 @@ export async function Shell({
   activeLensId,
   activeDesk,
   activeDrift,
+  activeFeed,
 }: {
   children: ReactNode;
   activeLensId?: string;
   activeDesk?: boolean;
   activeDrift?: boolean;
+  activeFeed?: boolean;
 }) {
-  const lenses = await getLenses();
-  const mindActive = !activeLensId && !activeDesk && !activeDrift;
-  return (
-    <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
-      <aside
-        style={{
-          width: 230,
-          flex: "none",
-          borderRight: `1px solid ${tokens.color.hairline}`,
-          background: tokens.color.panel,
-          display: "flex",
-          flexDirection: "column",
-          padding: "22px 16px",
-        }}
-      >
-        {/* Wordmark + 3-line cobalt logo mark */}
-        <div
+  const [lenses, me] = await Promise.all([getLenses(), getMe()]);
+  const mindActive = !activeLensId && !activeDesk && !activeDrift && !activeFeed;
+  // Self-hosted accounts may have no e-mail; fall back to a neutral label.
+  const accountName = me?.email ? me.email.split("@")[0] : "You";
+  const accountInitial = accountName[0].toUpperCase();
+  // Rendered twice: in the desktop aside and inside the mobile drawer.
+  const sidebar = (
+    <>
+        {/* Wordmark + 3-line cobalt logo mark — links home (The Mind) */}
+        <Link
+          href="/"
           style={{
             display: "flex",
             alignItems: "center",
             gap: 9,
             padding: "0 6px 24px",
+            textDecoration: "none",
+            color: "inherit",
           }}
         >
           <div
@@ -94,7 +94,33 @@ export async function Shell({
           >
             Openmind
           </span>
-        </div>
+        </Link>
+
+        {/* The Mind — the home library. Active unless viewing a lens, feed, drift or the desk. */}
+        <Link
+          href="/"
+          style={{
+            ...navBase,
+            textDecoration: "none",
+            background: mindActive ? "rgba(27,63,209,.1)" : "transparent",
+            color: mindActive ? tokens.color.cobalt : tokens.color.ink,
+          }}
+        >
+          <span style={{ fontSize: 15, width: 16 }}>◧</span> The Mind
+        </Link>
+
+        {/* Feed — the reverse-chron river of everything your subscriptions brought in. */}
+        <Link
+          href="/feed"
+          style={{
+            ...navBase,
+            textDecoration: "none",
+            background: activeFeed ? "rgba(27,63,209,.1)" : "transparent",
+            color: activeFeed ? tokens.color.cobalt : tokens.color.ink,
+          }}
+        >
+          <span style={{ fontSize: 15, width: 16 }}>≋</span> Feed
+        </Link>
 
         {/* Desk — the pinboard of what you're working with. */}
         <Link
@@ -107,19 +133,6 @@ export async function Shell({
           }}
         >
           <span style={{ fontSize: 15, width: 16 }}>◵</span> Desk
-        </Link>
-
-        {/* The Mind — the home library. Active unless viewing a lens or the desk. */}
-        <Link
-          href="/"
-          style={{
-            ...navBase,
-            textDecoration: "none",
-            background: mindActive ? "rgba(27,63,209,.1)" : "transparent",
-            color: mindActive ? tokens.color.cobalt : tokens.color.ink,
-          }}
-        >
-          <span style={{ fontSize: 15, width: 16 }}>◧</span> The Mind
         </Link>
 
         {/* Drift — calm, finite resurfacing of forgotten saves. */}
@@ -200,7 +213,7 @@ export async function Shell({
               flex: "none",
             }}
           >
-            R
+            {accountInitial}
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div
@@ -214,7 +227,7 @@ export async function Shell({
                 textOverflow: "ellipsis",
               }}
             >
-              Rohith Gilla
+              {accountName}
             </div>
             <div
               className="meta"
@@ -225,61 +238,46 @@ export async function Shell({
                 marginTop: 3,
               }}
             >
-              Owner · signed in
+              {me?.email || "Owner · signed in"}
             </div>
           </div>
         </div>
 
-        {/* Storage meter — static; local, self-hosted */}
-        <div
-          style={{
-            padding: "14px 10px 2px",
-            marginTop: 12,
-            borderTop: "1px solid rgba(28,26,22,.09)",
-          }}
-        >
-          <div className="meta" style={{ marginBottom: 7 }}>
-            Local · self-hosted
-          </div>
+        {/* Library stats — self-hosting has no quota, so counts, not a meter */}
+        {me && (
           <div
             style={{
-              height: 5,
-              borderRadius: 3,
-              background: "rgba(28,26,22,.1)",
-              overflow: "hidden",
+              padding: "14px 10px 2px",
+              marginTop: 12,
+              borderTop: "1px solid rgba(28,26,22,.09)",
             }}
           >
+            <div className="meta" style={{ marginBottom: 7 }}>
+              Local · self-hosted
+            </div>
             <div
-              style={{ width: "34%", height: "100%", background: tokens.color.green }}
-            />
+              className="meta"
+              style={{
+                textTransform: "none",
+                letterSpacing: ".02em",
+                color: tokens.color.inkFaintAlt,
+              }}
+            >
+              {me.itemCount === 1 ? "1 item" : `${me.itemCount} items`} ·{" "}
+              {formatBytes(me.storageBytes)} archived
+            </div>
           </div>
-          <div
-            className="meta"
-            style={{
-              marginTop: 6,
-              textTransform: "none",
-              letterSpacing: ".02em",
-              color: tokens.color.inkFaintAlt,
-            }}
-          >
-            3.1 GB / 9 GB archived
-          </div>
-        </div>
-      </aside>
+        )}
+    </>
+  );
 
+  return (
+    <div className="shell">
+      {/* Mobile-only sticky bar + drawer; display:none on desktop. */}
+      <MobileNav sidebar={sidebar} />
+      <aside className="shell-sidebar">{sidebar}</aside>
       {/* Fluid main column */}
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          minWidth: 0,
-          overflow: "auto",
-          background: tokens.color.paper,
-        }}
-      >
-        {children}
-      </div>
+      <div className="shell-main">{children}</div>
     </div>
   );
 }

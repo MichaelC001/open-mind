@@ -51,18 +51,41 @@ function Footer({
   dots,
   meta,
   metaColor,
+  viaFeed,
 }: {
   dots: string[];
   meta: string;
   metaColor?: string;
+  viaFeed?: boolean;
 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 11 }}>
       <Palette colors={dots} />
-      <span className="meta" style={{ marginLeft: "auto", ...(metaColor ? { color: metaColor } : {}) }}>
+      <span
+        className="meta"
+        style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, ...(metaColor ? { color: metaColor } : {}) }}
+      >
+        {viaFeed ? <FeedBadge /> : null}
         {meta}
       </span>
     </div>
+  );
+}
+
+/** Subtle mono badge marking an item as feed-sourced; title lookup isn't available in cards. */
+function FeedBadge() {
+  return (
+    <span
+      className="meta"
+      style={{
+        color: color.inkFaint,
+        border: `1px solid ${color.hairline}`,
+        borderRadius: 999,
+        padding: "1px 6px",
+      }}
+    >
+      via feed
+    </span>
   );
 }
 
@@ -218,7 +241,8 @@ export function ItemCard({ item }: { item: Item }) {
         />
         <div style={{ padding: "11px 13px", display: "flex", alignItems: "center", gap: 8 }}>
           <Palette colors={dots} />
-          <span className="meta" style={{ marginLeft: "auto" }}>
+          <span className="meta" style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+            {item.feedId ? <FeedBadge /> : null}
             {withDomain("Image")}
           </span>
         </div>
@@ -281,7 +305,7 @@ export function ItemCard({ item }: { item: Item }) {
               {text}
             </div>
           ) : null}
-          <Footer dots={dots} meta={withDomain("Post")} />
+          <Footer dots={dots} meta={withDomain("Post")} viaFeed={!!item.feedId} />
           {pending ? <Enriching /> : null}
         </div>
       </article>
@@ -329,7 +353,7 @@ export function ItemCard({ item }: { item: Item }) {
         <div style={{ padding: "12px 14px" }}>
           {item.title ? <h2 style={serifTitle(16)}>{item.title}</h2> : null}
           {item.summary ? <p style={specStyle}>{item.summary}</p> : null}
-          <Footer dots={dots} meta={withDomain("Video")} />
+          <Footer dots={dots} meta={withDomain("Video")} viaFeed={!!item.feedId} />
           {pending ? <Enriching /> : null}
         </div>
       </article>
@@ -348,7 +372,7 @@ export function ItemCard({ item }: { item: Item }) {
           {item.title ? <h2 style={serifTitle(16)}>{item.title}</h2> : null}
           {item.summary ? <p style={{ ...specStyle, ...clamp(2) }}>{item.summary}</p> : null}
           <Tags tags={unionTags(item.tags, item.userTags)} />
-          <Footer dots={dots} meta={withDomain("Product")} />
+          <Footer dots={dots} meta={withDomain("Product")} viaFeed={!!item.feedId} />
           {pending ? <Enriching /> : null}
         </div>
       </article>
@@ -366,7 +390,7 @@ export function ItemCard({ item }: { item: Item }) {
         <div style={{ padding: "12px 14px" }}>
           {item.title ? <h2 style={serifTitle(15.5)}>{item.title}</h2> : null}
           <Tags tags={unionTags(item.tags, item.userTags)} />
-          <Footer dots={dots} meta={withDomain("Book")} />
+          <Footer dots={dots} meta={withDomain("Book")} viaFeed={!!item.feedId} />
           {pending ? <Enriching /> : null}
         </div>
       </article>
@@ -388,7 +412,7 @@ export function ItemCard({ item }: { item: Item }) {
               {item.summary}
             </div>
           ) : null}
-          <Footer dots={dots} meta={withDomain("Recipe")} />
+          <Footer dots={dots} meta={withDomain("Recipe")} viaFeed={!!item.feedId} />
           {pending ? <Enriching /> : null}
         </div>
       </article>
@@ -407,7 +431,7 @@ export function ItemCard({ item }: { item: Item }) {
         {item.title ? <h2 style={{ ...serifTitle(17), lineHeight: 1.2 }}>{item.title}</h2> : null}
         {item.summary ? <p style={summaryStyle}>{item.summary}</p> : null}
         <Tags tags={unionTags(item.tags, item.userTags)} />
-        <Footer dots={dots} meta={withDomain(typeLabel[kind])} />
+        <Footer dots={dots} meta={withDomain(typeLabel[kind])} viaFeed={!!item.feedId} />
         {pending ? <Enriching /> : null}
       </div>
     </article>
