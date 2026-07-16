@@ -2,7 +2,7 @@
 
 import { tokens } from "@openmind/ui";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { cardKind, domainOf, typeLabel } from "../lib/cards";
 import type { RelatedItem } from "../lib/types";
 
@@ -55,14 +55,22 @@ function labelFor(item: RelatedItem["item"]): string {
   return item.title || domainOf(item.url) || item.url;
 }
 
-type RowState = { failed?: boolean };
+/** Divider + content collapse together — nothing renders when the rail is empty. */
+function Section({ children }: { children: ReactNode }) {
+  return (
+    <>
+      <div style={{ height: 1, background: color.hairline, margin: "18px 0" }} />
+      {children}
+    </>
+  );
+}
 
-export function RelatedRail({ itemId }: { itemId: string }) {
+export function RelatedRail({ itemId, onLinked }: { itemId: string; onLinked?: () => void }) {
   const router = useRouter();
   const [related, setRelated] = useState<RelatedItem[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [rowState, setRowState] = useState<Record<string, RowState>>({});
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,7 +95,7 @@ export function RelatedRail({ itemId }: { itemId: string }) {
   async function linkRow(toId: string) {
     if (!related) return;
     const prev = related;
-    setRowState((s) => ({ ...s, [toId]: {} }));
+    setError(null);
     setRelated(related.filter((r) => r.item.id !== toId));
     try {
       const res = await fetch(`/api/items/${itemId}/links`, {
@@ -96,46 +104,47 @@ export function RelatedRail({ itemId }: { itemId: string }) {
         body: JSON.stringify({ toId }),
       });
       if (!res.ok) throw new Error(`link failed: ${res.status}`);
-      router.refresh();
+      onLinked?.();
     } catch (err) {
       console.error("related item link failed", { itemId, toId, err });
       setRelated(prev);
-      setRowState((s) => ({ ...s, [toId]: { failed: true } }));
+      setError("Could not add link. Please try again.");
     }
   }
 
   if (loadFailed) {
     return (
-      <button
-        type="button"
-        onClick={() => setLoadAttempt((n) => n + 1)}
-        style={{
-          display: "block",
-          font: `500 11px/1 ${font.mono}`,
-          letterSpacing: ".02em",
-          color: color.inkFaint,
-          background: "none",
-          border: `1px solid ${color.hairline}`,
-          borderRadius: 20,
-          padding: "6px 12px",
-          cursor: "pointer",
-        }}
-      >
-        Couldn&apos;t load related items — retry
-      </button>
+      <Section>
+        <button
+          type="button"
+          onClick={() => setLoadAttempt((n) => n + 1)}
+          style={{
+            display: "block",
+            font: `500 11px/1 ${font.mono}`,
+            letterSpacing: ".02em",
+            color: color.inkFaint,
+            background: "none",
+            border: `1px solid ${color.hairline}`,
+            borderRadius: 20,
+            padding: "6px 12px",
+            cursor: "pointer",
+          }}
+        >
+          Couldn&apos;t load related items — retry
+        </button>
+      </Section>
     );
   }
 
   if (!related || related.length === 0) return null;
 
   return (
-    <div>
+    <Section>
       <div className="meta" style={{ color: color.inkFaintAlt }}>
         Related
       </div>
       <div style={{ marginTop: 6 }}>
         {related.map((row) => {
-          const state = rowState[row.item.id];
           const hint = row.distance <= CLOSE_MATCH_THRESHOLD ? "close match" : "related";
           return (
             <div key={row.item.id} style={rowStyle}>
@@ -148,11 +157,6 @@ export function RelatedRail({ itemId }: { itemId: string }) {
                 <span className="meta">
                   {typeLabel[cardKind(row.item.cardType)]} · {hint}
                 </span>
-                {state?.failed ? (
-                  <span style={{ fontFamily: font.mono, fontSize: "0.72rem", color: color.danger }}>
-                    Could not link. Please try again.
-                  </span>
-                ) : null}
               </button>
               <button type="button" onClick={() => linkRow(row.item.id)} style={addToggle}>
                 + Link
@@ -161,6 +165,14 @@ export function RelatedRail({ itemId }: { itemId: string }) {
           );
         })}
       </div>
-    </div>
+      {error ? (
+        <p
+          aria-live="polite"
+          style={{ fontFamily: font.mono, fontSize: "0.72rem", color: color.danger, margin: "8px 0 0" }}
+        >
+          {error}
+        </p>
+      ) : null}
+    </Section>
   );
 }

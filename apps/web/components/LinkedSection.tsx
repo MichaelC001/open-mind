@@ -70,7 +70,7 @@ function labelFor(item: Item): string {
   return item.title || domainOf(item.url) || item.url;
 }
 
-export function LinkedSection({ itemId }: { itemId: string }) {
+export function LinkedSection({ itemId, version = 0 }: { itemId: string; version?: number }) {
   const router = useRouter();
   const [links, setLinks] = useState<Item[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,7 +92,7 @@ export function LinkedSection({ itemId }: { itemId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [itemId]);
+  }, [itemId, version]);
 
   function openPicker() {
     setPickerOpen(true);
