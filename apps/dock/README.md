@@ -6,19 +6,27 @@ mind from anywhere, without opening the web app. Tauri v2, macOS-only for now.
 ## Hotkeys
 
 - **⌘⇧S — Quick Save.** Grabs the frontmost browser tab (URL + title) and saves
-  it instantly. No window — a notification confirms. Supported browsers:
-  Safari, Chrome, Brave, Edge, Arc. Firefox exposes no AppleScript tab access —
-  use the panel instead.
+  it instantly. A notification confirms, and the panel pops up with a small
+  **quick-tag strip**: type comma-separated tags and press Enter to file the
+  save, or Esc (or just wait 5 seconds) to skip — the save has already
+  happened either way. Supported browsers: Safari, Chrome, Brave, Edge, Arc.
+  Firefox exposes no AppleScript tab access — use the panel instead.
 - **⌘⇧O — Quick Find.** A Spotlight-style panel: type to search your library
   (↑/↓ to pick, Enter opens the item in your browser), or paste/type a URL and
   Enter saves it. ⌘Enter saves whatever you typed as a URL or note. Esc hides.
+
+Both hotkeys are **rebindable**: Settings → Shortcuts — click a field, press
+your combination (at least one modifier plus a key), Save. If a combination
+is taken by the OS or another app you'll see an inline error and the old
+binding stays active; **Reset to defaults** restores ⌘⇧S/⌘⇧O. Custom
+bindings persist across restarts (stored in the app's config directory).
 
 If a hotkey is taken by another app you'll get a notification and the tray menu
 still covers both actions (Open panel / Save current tab / Settings / Quit).
 
 ## Install
 
-- **Download**: grab the latest `.dmg` from [GitHub Releases](https://github.com/Rohithgilla12/open-mind/releases) (signed + notarized — opens without warnings). Also on the [CrabNebula download page](https://web.crabnebula.cloud/rohith-gilla/openmind/releases), or grab the [latest dmg directly](https://cdn.crabnebula.app/download/rohith-gilla/openmind/latest/platform/dmg-aarch64).
+- **Download**: grab the latest `.dmg` from [GitHub Releases](https://github.com/Rohithgilla12/open-mind/releases) (signed + notarised — and opens without warnings — when the maintainer's signing secrets are configured in CI; unsigned builds fall back with a Gatekeeper warning). Also on the [CrabNebula download page](https://web.crabnebula.cloud/rohith-gilla/openmind/releases), or grab the [latest dmg directly](https://cdn.crabnebula.app/download/rohith-gilla/openmind/latest/platform/dmg-aarch64).
 - **Auto-updates**: installed docks check for new releases on every launch and update themselves — no reinstalling.
 
 ## Run / build
@@ -49,6 +57,4 @@ Rust unit tests: `cd apps/dock/src-tauri && cargo test`.
 
 - The instance must be reachable over HTTPS; search goes through the web app's
   `/api/search` proxy (needs a server running the 2026-07-06 web build or later).
-- The app is unsigned — build from source. Signing/notarisation + DMG
-  distribution is a follow-up.
-- Not yet: pinned Desk bar, Windows/Linux, launch-at-login, hotkey rebinding.
+- Not yet: Windows/Linux, offline save queue.
