@@ -194,6 +194,41 @@ func (o *OpenAI) ParseQuery(ctx context.Context, q string) (ParsedQuery, error) 
 	}, nil
 }
 
+// ExtractPlaces pulls the visitable places named in a video caption via
+// chat/completions JSON mode.
+func (o *OpenAI) ExtractPlaces(ctx context.Context, title, caption string) ([]Place, error) {
+	req := chatRequest{
+		Model:          o.model,
+		Temperature:    0,
+		ResponseFormat: &responseFormat{Type: "json_object"},
+		Messages: []chatMessage{
+			{Role: "system", Content: extractPlacesInstruction},
+			{Role: "user", Content: fmt.Sprintf("Title: %s\nCaption: %s", truncate(title, 500), truncate(caption, 8000))},
+		},
+	}
+	var resp chatResponse
+	if err := o.doJSON(ctx, "/chat/completions", req, &resp); err != nil {
+		return nil, fmt.Errorf("openai extractplaces: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("openai extractplaces: empty response")
+	}
+	var parsed struct {
+		Places []struct {
+			Name string `json:"name"`
+			Hint string `json:"hint"`
+		} `json:"places"`
+	}
+	if err := json.Unmarshal([]byte(resp.Choices[0].Message.Content), &parsed); err != nil {
+		return nil, fmt.Errorf("parsing openai places: %w", err)
+	}
+	places := make([]Place, 0, len(parsed.Places))
+	for _, p := range parsed.Places {
+		places = append(places, Place{Name: p.Name, Hint: p.Hint})
+	}
+	return sanitisePlaces(places), nil
+}
+
 // doJSON performs a POST with a JSON body and decodes a JSON response,
 // classifying HTTP errors as RetryableError so the chain can fail over.
 func (o *OpenAI) doJSON(ctx context.Context, path string, reqBody, out any) error {

@@ -136,6 +136,9 @@ With no provider configured (or `AI_PROVIDER=noop`), saves are extracted and mad
 | `OPENAI_MODEL` | _(empty)_ | Chat/completion model name used for summarise and tag stages; required when `openai` appears in the chain. |
 | `OPENAI_EMBED_MODEL` | _(empty)_ | Embedding model name. Must produce 768-dimension vectors — see the pgvector note below. |
 | `AI_RPM_<NAME>` | _(empty)_ | Per-provider rate limit in requests per minute, e.g. `AI_RPM_GEMINI=10`, `AI_RPM_OPENAI=60`. `NAME` matches the provider name as it appears in `AI_PROVIDERS`, upper-cased. When the limiter is saturated the chain treats it as a fallover, not a failure. |
+| `GEOCODER` | _(empty)_ | Optional geocoder for places extracted from social-video captions (Instagram reels, TikToks). `nominatim` enables OSM Nominatim; unset stores places by name without coordinates. Place extraction itself follows the AI provider — with `noop` it is simply off. |
+| `NOMINATIM_URL` | `https://nominatim.openstreetmap.org` | Nominatim endpoint. Point at a self-hosted instance for heavy use; the public endpoint is called at most 1 request/second per its usage policy. |
+| `NOMINATIM_EMAIL` | _(empty)_ | Contact e-mail sent with public-endpoint requests, per the [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/). Recommended when using the default endpoint. |
 
 #### Example: Gemini only
 

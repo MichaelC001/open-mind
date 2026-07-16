@@ -24,6 +24,7 @@ import (
 	"github.com/rohithgilla12/openmind/api/internal/auth"
 	"github.com/rohithgilla12/openmind/api/internal/enrich"
 	"github.com/rohithgilla12/openmind/api/internal/feeds"
+	"github.com/rohithgilla12/openmind/api/internal/geo"
 	"github.com/rohithgilla12/openmind/api/internal/jobs"
 	"github.com/rohithgilla12/openmind/api/internal/mailer"
 	appmcp "github.com/rohithgilla12/openmind/api/internal/mcp"
@@ -140,23 +141,34 @@ func run(ctx context.Context, args []string) error {
 		slog.Info("send-to-kindle not configured — set SMTP_HOST and SMTP_FROM to enable")
 	}
 
+	// Geocoding for extracted places is optional (GEOCODER env). Only the
+	// worker processes use it, but building it up front keeps config errors
+	// loud on every command.
+	geocoder, err := geo.FromEnv()
+	if err != nil {
+		return err
+	}
+	if geocoder != nil {
+		slog.Info("geocoder ready", "geocoder", geocoder.Name())
+	}
+
 	switch cmd {
 	case "serve":
-		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, false)
+		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, geocoder, false)
 		if err != nil {
 			return err
 		}
 		feedSvc.River = client
 		return serveHTTP(ctx, s, client, provider, authCfg, assetStore, assetMaxBytes, feedSvc, kindleConfigFromDeps(kindleDeps))
 	case "work":
-		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, true)
+		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, geocoder, true)
 		if err != nil {
 			return err
 		}
 		feedSvc.River = client
 		return work(ctx, client)
 	case "all":
-		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, true)
+		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, geocoder, true)
 		if err != nil {
 			return err
 		}
@@ -166,7 +178,7 @@ func run(ctx context.Context, args []string) error {
 		if err := checkStdioAuthMode(); err != nil {
 			return err
 		}
-		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, false)
+		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, geocoder, false)
 		if err != nil {
 			return err
 		}

@@ -335,6 +335,22 @@ type PatchSettingsRequest struct {
 	KindleEmail *openapi_types.Email `json:"kindleEmail,omitempty"`
 }
 
+// Place defines model for Place.
+type Place struct {
+	// Address geocoder display address; empty when not geocoded
+	Address string `json:"address"`
+
+	// Hint disambiguating locality from the source text, e.g. a city
+	Hint string             `json:"hint"`
+	Id   openapi_types.UUID `json:"id"`
+	Lat  *float64           `json:"lat,omitempty"`
+	Lng  *float64           `json:"lng,omitempty"`
+	Name string             `json:"name"`
+
+	// Source which signal produced this place (caption)
+	Source string `json:"source"`
+}
+
 // RelatedItem defines model for RelatedItem.
 type RelatedItem struct {
 	Distance float64 `json:"distance"`
@@ -556,6 +572,9 @@ type ServerInterface interface {
 	// Remove a link
 	// (DELETE /items/{id}/links/{toId})
 	DeleteItemLink(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, toId openapi_types.UUID)
+	// Places extracted from this item
+	// (GET /items/{id}/places)
+	GetItemPlaces(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 
 	// (GET /items/{id}/related)
 	GetRelatedItems(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
@@ -741,6 +760,12 @@ func (_ Unimplemented) CreateItemLink(w http.ResponseWriter, r *http.Request, id
 // Remove a link
 // (DELETE /items/{id}/links/{toId})
 func (_ Unimplemented) DeleteItemLink(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, toId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Places extracted from this item
+// (GET /items/{id}/places)
+func (_ Unimplemented) GetItemPlaces(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1574,6 +1599,37 @@ func (siw *ServerInterfaceWrapper) DeleteItemLink(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// GetItemPlaces operation middleware
+func (siw *ServerInterfaceWrapper) GetItemPlaces(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetItemPlaces(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetRelatedItems operation middleware
 func (siw *ServerInterfaceWrapper) GetRelatedItems(w http.ResponseWriter, r *http.Request) {
 
@@ -2088,6 +2144,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/items/{id}/links/{toId}", wrapper.DeleteItemLink)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/items/{id}/places", wrapper.GetItemPlaces)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/items/{id}/related", wrapper.GetRelatedItems)

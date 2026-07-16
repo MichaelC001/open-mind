@@ -142,6 +142,22 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/RelatedItem" }
         "404": { description: unknown item }
+  /items/{id}/places:
+    get:
+      operationId: getItemPlaces
+      summary: Places extracted from this item
+      description: "Real-world places the enrichment pipeline extracted from the item (e.g. cafes named in an Instagram reel caption). Empty until the extract_places job has run; lat/lng are absent when no geocoder is configured."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: extracted places, oldest first; empty when none
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Place" }
+        "404": { description: unknown item }
   /items/{id}/kindle:
     post:
       operationId: sendItemToKindle
@@ -607,6 +623,17 @@ components:
       properties:
         item: { $ref: "#/components/schemas/Item" }
         distance: { type: number, format: double }
+    Place:
+      type: object
+      required: [id, name, hint, address, source]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        hint: { type: string, description: "disambiguating locality from the source text, e.g. a city" }
+        address: { type: string, description: "geocoder display address; empty when not geocoded" }
+        lat: { type: number, format: double }
+        lng: { type: number, format: double }
+        source: { type: string, description: "which signal produced this place (caption)" }
     Highlight:
       type: object
       required: [id, sourceItemId, quoteItemId, exact, prefix, suffix, offsetHint, createdAt]

@@ -1,0 +1,109 @@
+package jobs
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/riverqueue/river"
+
+	"github.com/rohithgilla12/openmind/api/internal/ai"
+	"github.com/rohithgilla12/openmind/api/internal/geo"
+	"github.com/rohithgilla12/openmind/api/internal/store"
+	"github.com/rohithgilla12/openmind/api/internal/store/db"
+)
+
+// ExtractPlacesArgs is the River job payload for extracting places from an
+// enriched social-video item. IDs only; the worker fetches fresh state.
+type ExtractPlacesArgs struct {
+	UserID uuid.UUID `json:"user_id"`
+	ItemID uuid.UUID `json:"item_id"`
+}
+
+// Kind identifies the job type in River.
+func (ExtractPlacesArgs) Kind() string { return "extract_places" }
+
+// ExtractPlacesWorker pulls visitable places out of an item's caption text
+// (title + body) via the AI provider, optionally geocodes them, and replaces
+// the item's place rows. It runs as its own job, after enrichment, so a slow
+// geocoder or model never blocks or retries the core enrichment pipeline.
+type ExtractPlacesWorker struct {
+	river.WorkerDefaults[ExtractPlacesArgs]
+	Store    *store.Store
+	Provider ai.Provider
+	// Geocoder is optional (nil = geocoding off): places are then stored by
+	// name with no coordinates.
+	Geocoder geo.Geocoder
+}
+
+// Work extracts and stores places for one item. Idempotent: it replaces the
+// item's full place set, so a re-run reproduces the same rows. A provider
+// that cannot extract places (noop) or an item with no caption text is a
+// clean no-op, never an error.
+func (w *ExtractPlacesWorker) Work(ctx context.Context, job *river.Job[ExtractPlacesArgs]) error {
+	q := w.Store.Queries
+	item, err := q.GetItem(ctx, db.GetItemParams{UserID: job.Args.UserID, ID: job.Args.ItemID})
+	if err != nil {
+		return fmt.Errorf("loading item %s: %w", job.Args.ItemID, err)
+	}
+
+	if strings.TrimSpace(item.Title+item.Body) == "" {
+		return nil
+	}
+
+	places, err := w.Provider.ExtractPlaces(ctx, item.Title, item.Body)
+	if errors.Is(err, ai.ErrNotSupported) {
+		return nil // noop provider: place extraction is simply off
+	}
+	if err != nil {
+		return fmt.Errorf("extracting places: %w", err)
+	}
+
+	rows := make([]db.InsertItemPlaceParams, 0, len(places))
+	for _, p := range places {
+		row := db.InsertItemPlaceParams{
+			UserID: item.UserID, ItemID: item.ID,
+			Name: p.Name, Hint: p.Hint, Source: "caption",
+		}
+		// Geocoding is best-effort decoration: a miss or error leaves the
+		// place coordinate-less rather than failing (and re-running) the
+		// whole extraction.
+		if w.Geocoder != nil {
+			query := p.Name
+			if p.Hint != "" {
+				query += ", " + p.Hint
+			}
+			res, ok, gerr := w.Geocoder.Geocode(ctx, query)
+			switch {
+			case gerr != nil:
+				slog.Warn("geocoding place failed, storing without coordinates",
+					"item_id", item.ID, "place", p.Name, "err", gerr)
+			case ok:
+				row.Address = res.Address
+				row.Lat = pgtype.Float8{Float64: res.Lat, Valid: true}
+				row.Lng = pgtype.Float8{Float64: res.Lng, Valid: true}
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	// Replace the item's place set atomically so a mid-write crash or retry
+	// can never leave a mix of old and new rows.
+	return pgx.BeginFunc(ctx, w.Store.Pool, func(tx pgx.Tx) error {
+		qtx := q.WithTx(tx)
+		if err := qtx.DeleteItemPlaces(ctx, db.DeleteItemPlacesParams{UserID: item.UserID, ItemID: item.ID}); err != nil {
+			return fmt.Errorf("clearing places: %w", err)
+		}
+		for _, row := range rows {
+			if err := qtx.InsertItemPlace(ctx, row); err != nil {
+				return fmt.Errorf("inserting place %q: %w", row.Name, err)
+			}
+		}
+		return nil
+	})
+}

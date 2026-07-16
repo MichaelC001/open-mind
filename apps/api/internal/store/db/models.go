@@ -95,6 +95,19 @@ type ItemEmbedding struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type ItemPlace struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	ItemID    uuid.UUID
+	Name      string
+	Hint      string
+	Address   string
+	Lat       pgtype.Float8
+	Lng       pgtype.Float8
+	Source    string
+	CreatedAt pgtype.Timestamptz
+}
+
 type Lense struct {
 	ID             uuid.UUID
 	UserID         uuid.UUID

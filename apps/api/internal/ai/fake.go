@@ -40,3 +40,16 @@ func (*Fake) Embed(_ context.Context, text string) ([]float32, error) {
 func (*Fake) ParseQuery(_ context.Context, q string) (ParsedQuery, error) {
 	return ParsedQuery{Text: q}, nil
 }
+
+// ExtractPlaces returns a stable two-place list so job tests can assert
+// idempotency, and an empty list for an empty caption so no-signal paths are
+// testable too.
+func (*Fake) ExtractPlaces(_ context.Context, _, caption string) ([]Place, error) {
+	if caption == "" {
+		return nil, nil
+	}
+	return []Place{
+		{Name: "Fake Cafe", Hint: "Faketown"},
+		{Name: "Fake Museum", Hint: ""},
+	}, nil
+}

@@ -104,6 +104,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/{id}/places": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Places extracted from this item
+         * @description Real-world places the enrichment pipeline extracted from the item (e.g. cafes named in an Instagram reel caption). Empty until the extract_places job has run; lat/lng are absent when no geocoder is configured.
+         */
+        get: operations["getItemPlaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{id}/kindle": {
         parameters: {
             query?: never;
@@ -550,6 +570,21 @@ export interface components {
             item: components["schemas"]["Item"];
             /** Format: double */
             distance: number;
+        };
+        Place: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description disambiguating locality from the source text, e.g. a city */
+            hint: string;
+            /** @description geocoder display address; empty when not geocoded */
+            address: string;
+            /** Format: double */
+            lat?: number;
+            /** Format: double */
+            lng?: number;
+            /** @description which signal produced this place (caption) */
+            source: string;
         };
         Highlight: {
             /** Format: uuid */
@@ -1021,6 +1056,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RelatedItem"][];
+                };
+            };
+            /** @description unknown item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getItemPlaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description extracted places, oldest first; empty when none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Place"][];
                 };
             };
             /** @description unknown item */

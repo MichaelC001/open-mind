@@ -4,6 +4,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +13,8 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/rohithgilla12/openmind/api/internal/enrich"
+	"github.com/rohithgilla12/openmind/api/internal/geo"
+	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
 
 // EnrichArgs is the River job payload for enriching a saved item. It carries
@@ -28,11 +31,31 @@ func (EnrichArgs) Kind() string { return "enrich_item" }
 type EnrichWorker struct {
 	river.WorkerDefaults[EnrichArgs]
 	Pipeline *enrich.Pipeline
+	// River enqueues the follow-up extract_places job for social-video items.
+	// Set after client construction (same pattern as ScanDigestsWorker.River);
+	// nil skips the follow-up, which keeps enrichment self-contained in tests.
+	River *river.Client[pgx.Tx]
 }
 
-// Work executes the enrichment pipeline. River retries on error.
+// Work executes the enrichment pipeline, then chains the extract_places job
+// for social-video items. The follow-up is separate work: its failure must
+// not re-run enrichment, and a failed enqueue is only logged — the enrichment
+// itself succeeded, and a manual re-enrich re-offers the chance to enqueue.
 func (w *EnrichWorker) Work(ctx context.Context, job *river.Job[EnrichArgs]) error {
-	return w.Pipeline.Run(ctx, job.Args.UserID, job.Args.ItemID)
+	if err := w.Pipeline.Run(ctx, job.Args.UserID, job.Args.ItemID); err != nil {
+		return err
+	}
+	if w.River == nil {
+		return nil
+	}
+	item, err := w.Pipeline.Store.Queries.GetItem(ctx, db.GetItemParams{UserID: job.Args.UserID, ID: job.Args.ItemID})
+	if err != nil || !enrich.IsSocialVideoURL(item.Url) {
+		return nil
+	}
+	if _, err := w.River.Insert(ctx, ExtractPlacesArgs{UserID: job.Args.UserID, ItemID: job.Args.ItemID}, nil); err != nil {
+		slog.Warn("enqueueing extract_places", "item_id", job.Args.ItemID, "err", err)
+	}
+	return nil
 }
 
 // digestScanInterval is how often the periodic scan_digests job runs. It is
@@ -50,19 +73,22 @@ const digestScanInterval = time.Hour
 // passed nil. kindleDeps is likewise only exercised by the worker process;
 // the insert-only path still accepts it (unused) so callers don't need two
 // signatures.
-func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefresher, kindleDeps KindleDeps, workersOn bool) (*river.Client[pgx.Tx], error) {
+func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefresher, kindleDeps KindleDeps, geocoder geo.Geocoder, workersOn bool) (*river.Client[pgx.Tx], error) {
 	cfg := &river.Config{}
-	// scanWorker is registered before the client exists (AddWorker needs a
-	// worker instance up front), but its River field — used to enqueue
-	// send_kindle jobs — can only be set once the client is built. Since
-	// AddWorker takes a pointer and River only reads scanWorker.River inside
-	// Work (called later, after NewRiverClient returns), setting the field
+	// scanWorker and enrichWorker are registered before the client exists
+	// (AddWorker needs a worker instance up front), but their River fields —
+	// used to enqueue follow-up jobs — can only be set once the client is
+	// built. Since AddWorker takes a pointer and River is only read inside
+	// Work (called later, after NewRiverClient returns), setting the fields
 	// after construction is safe.
 	var scanWorker *ScanDigestsWorker
+	var enrichWorker *EnrichWorker
 	if workersOn {
 		workers := river.NewWorkers()
 		scanWorker = &ScanDigestsWorker{Store: p.Store, Provider: p.AI, Deps: kindleDeps}
-		river.AddWorker(workers, &EnrichWorker{Pipeline: p})
+		enrichWorker = &EnrichWorker{Pipeline: p}
+		river.AddWorker(workers, enrichWorker)
+		river.AddWorker(workers, &ExtractPlacesWorker{Store: p.Store, Provider: p.AI, Geocoder: geocoder})
 		river.AddWorker(workers, &PollFeedsWorker{Service: feedService})
 		river.AddWorker(workers, &SendKindleWorker{Store: p.Store, Provider: p.AI, Deps: kindleDeps})
 		river.AddWorker(workers, scanWorker)
@@ -87,6 +113,7 @@ func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefr
 	}
 	if workersOn {
 		scanWorker.River = client
+		enrichWorker.River = client
 	}
 	return client, nil
 }
