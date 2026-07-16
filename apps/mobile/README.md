@@ -3,11 +3,11 @@
 A thin Expo (SDK 57) client for [Openmind](../../README.md): capture links and notes
 into your instance from your phone — especially via the **share sheet** (share any
 link/text from another app → it lands in Capture, pre-filled) — plus a minimal
-library view and token login. All enrichment stays server-side; the app only talks
-to your instance's `/api/*` with a Bearer token.
+library view with search and token login. All enrichment stays server-side; the app
+only talks to your instance's `/api/*` with a Bearer token.
 
-Screens: **Library** (recent items), **Capture** (paste a URL / jot a note → Save),
-**Settings** (instance URL + API token).
+Screens: **Library** (recent items + search), **Capture** (paste a URL / jot a note →
+Save, with an offline queue), **Settings** (instance URL + API token).
 
 ## Prerequisites
 
@@ -45,6 +45,34 @@ On first launch nothing is configured, so you land on **Settings**:
 
 Then Capture and Library become usable.
 
+## Library search
+
+The Library tab has a search field. An empty query lists recent items
+(`GET /api/items`). Typing a query calls `GET /api/search?q=…&parse=true` (same
+NL-parse behaviour as the web app) and shows optional “understood” chips when the
+server returns them. Search requires a network connection — there is no local
+full-text index of the library.
+
+## Offline capture queue
+
+Capture is optimistic about bad networks:
+
+1. Save tries `POST /api/items` as usual.
+2. On a network failure (status 0), URL saves first attempt a short recovery check
+   (same URL recently created). If that fails — or for notes — the payload is
+   written to a durable **AsyncStorage** queue (`openmind.captureQueue`).
+3. The field clears and you see “Queued — will sync when you’re back online.”
+4. The queue flushes automatically on app foreground, tab focus, and when NetInfo
+   reports connectivity returning. Capture also shows “N waiting to sync” with a
+   **Sync now** button. Library’s subtitle shows a queued count when non-zero.
+
+URL entries already in the queue are deduped. Cap is 100 (oldest dropped).
+
+> **Share extension caveat:** the offline queue covers **in-app Capture** (and
+> Android share → Capture prefill). The iOS inline share extension
+> (`targets/share`) still does a live POST only — failed shares there are not
+> queued yet.
+
 ## Share sheet — requires a dev build
 
 Sharing is native code and **cannot run in Expo Go** — you need a custom dev build:
@@ -70,6 +98,7 @@ The two platforms take different routes:
 - **Android — opens the app.** [`expo-share-intent`](https://github.com/achorein/expo-share-intent)
   handles `text/*` SEND intents (iOS side disabled in `app.json`); the app
   opens on **Capture** pre-filled with the shared URL/text; tap **Save**.
+  Offline saves from this path use the same Capture queue.
 
 > Note: the token is mirrored into App Group UserDefaults (not the keychain) so
 > the extension can authenticate. On-device it is sandboxed to this app group;
