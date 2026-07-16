@@ -2,6 +2,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
 import { AccessibilityInfo, Animated, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import type { Item } from "@/lib/api";
+import { cardKind, typeLabel } from "@/lib/cards";
 import type { Settings } from "@/lib/settings";
 import { colors, fonts, radius, spacing, type, typeGradients, type CardKind } from "@/lib/theme";
 
@@ -12,38 +13,6 @@ function hostOf(url?: string): string | null {
   if (!match) return null;
   return match[1].replace(/^www\./i, "");
 }
-
-const KNOWN_KINDS: readonly CardKind[] = [
-  "article",
-  "quote",
-  "image",
-  "product",
-  "note",
-  "video",
-  "tweet",
-  "book",
-  "recipe",
-];
-
-/** Normalise a raw cardType into a known kind; unknown/absent → article. */
-function cardKind(cardType: string | undefined): CardKind {
-  if (cardType && (KNOWN_KINDS as readonly string[]).includes(cardType)) {
-    return cardType as CardKind;
-  }
-  return "article";
-}
-
-const typeLabel: Record<CardKind, string> = {
-  article: "Article",
-  quote: "Quote",
-  image: "Image",
-  product: "Product",
-  note: "Note",
-  video: "Video",
-  tweet: "Post",
-  book: "Book",
-  recipe: "Recipe",
-};
 
 /**
  * Resolve an item's leadImageUrl into an <Image> source. An instance-relative
@@ -138,9 +107,11 @@ type ItemCardProps = {
   item: Item;
   settings: Settings | null;
   onPress: (item: Item) => void;
+  /** Long-press to delete — omit to disable (e.g. on the feed screen). */
+  onLongPress?: (item: Item) => void;
 };
 
-export function ItemCard({ item, settings, onPress }: ItemCardProps) {
+export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps) {
   const kind = cardKind(item.cardType);
   const pending = item.status === "pending";
   const domain = hostOf(item.url);
@@ -153,6 +124,7 @@ export function ItemCard({ item, settings, onPress }: ItemCardProps) {
     <Pressable
       style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
       onPress={press}
+      onLongPress={onLongPress ? () => onLongPress(item) : undefined}
     >
       {children}
     </Pressable>

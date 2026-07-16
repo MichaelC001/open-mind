@@ -8,6 +8,7 @@ import { openBrowserAsync } from "expo-web-browser";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,32 +16,14 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { getItem, type ItemDetail } from "@/lib/api";
+import { deleteItem, getItem, type ItemDetail } from "@/lib/api";
+import { cardKind } from "@/lib/cards";
 import { colors, fonts, radius, spacing, typeGradients, type CardKind } from "@/lib/theme";
 
 type State =
   | { kind: "loading" }
   | { kind: "ready"; item: ItemDetail }
   | { kind: "error"; message: string };
-
-const KNOWN_KINDS: readonly CardKind[] = [
-  "article",
-  "quote",
-  "image",
-  "product",
-  "note",
-  "video",
-  "tweet",
-  "book",
-  "recipe",
-];
-
-function cardKind(cardType: string | undefined): CardKind {
-  if (cardType && (KNOWN_KINDS as readonly string[]).includes(cardType)) {
-    return cardType as CardKind;
-  }
-  return "article";
-}
 
 /** Types that get a gradient hero wash on the detail screen. */
 const HERO_KINDS: readonly CardKind[] = ["article", "image", "product", "book", "recipe", "video", "tweet"];
@@ -70,6 +53,30 @@ export default function ItemScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [deleting, setDeleting] = useState(false);
+
+  const confirmDelete = () => {
+    if (typeof id !== "string") return;
+    Alert.alert("Delete this item?", "This can't be undone.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            setDeleting(true);
+            const res = await deleteItem(id);
+            setDeleting(false);
+            if (res.ok) {
+              router.back();
+            } else {
+              Alert.alert("Couldn't delete", "Please try again.");
+            }
+          })();
+        },
+      },
+    ]);
+  };
 
   useEffect(() => {
     if (typeof id !== "string") return;
@@ -99,6 +106,11 @@ export default function ItemScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12}>
           <Text style={styles.back}>‹ Back</Text>
         </Pressable>
+        {state.kind === "ready" ? (
+          <Pressable onPress={confirmDelete} hitSlop={12} disabled={deleting}>
+            <Text style={styles.deleteAction}>{deleting ? "Deleting…" : "Delete"}</Text>
+          </Pressable>
+        ) : null}
       </View>
       <Body state={state} />
     </SafeAreaView>
@@ -205,8 +217,15 @@ function TagsRow({ tags }: { tags: string[] }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.paper },
-  topbar: { paddingHorizontal: spacing.xl, paddingVertical: spacing.md },
+  topbar: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+  },
   back: { color: colors.cobalt, fontFamily: fonts.sansSemiBold, fontSize: 15 },
+  deleteAction: { color: colors.danger, fontFamily: fonts.sansSemiBold, fontSize: 15 },
   container: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl },
   centre: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
   errorText: { fontFamily: fonts.sans, fontSize: 14, color: colors.inkMuted, textAlign: "center", lineHeight: 20 },
