@@ -4,11 +4,10 @@ import { tokens } from "@openmind/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { cardKind, domainOf, typeLabel } from "../lib/cards";
+import { relatedHint } from "../lib/related-hint";
 import type { RelatedItem } from "../lib/types";
 
 const { color, font } = tokens;
-
-const CLOSE_MATCH_THRESHOLD = 0.25;
 
 const rowStyle: CSSProperties = {
   display: "flex",
@@ -145,7 +144,7 @@ export function RelatedRail({ itemId, onLinked }: { itemId: string; onLinked?: (
       </div>
       <div style={{ marginTop: 6 }}>
         {related.map((row) => {
-          const hint = row.distance <= CLOSE_MATCH_THRESHOLD ? "close match" : "related";
+          const hint = relatedHint(row.distance);
           return (
             <div key={row.item.id} style={rowStyle}>
               <button
