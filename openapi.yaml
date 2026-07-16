@@ -523,16 +523,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeviceLinkCreated" }
-  /me:
-    get:
-      operationId: getMe
-      description: "The caller's account identity plus library stats (item count, bytes stored) for the app chrome."
-      responses:
-        "200":
-          description: account overview
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Me" }
   /settings:
     get:
       operationId: getSettings
@@ -777,13 +767,6 @@ components:
       properties:
         key: { type: string, description: "The full API key — shown exactly once." }
         name: { type: string }
-    Me:
-      type: object
-      required: [email, itemCount, storageBytes]
-      properties:
-        email: { type: string, description: "The account e-mail; empty string when the self-hosted account has none set." }
-        itemCount: { type: integer, description: "Items currently saved." }
-        storageBytes: { type: integer, format: int64, description: "Approximate bytes stored: extracted item bodies plus uploaded asset sizes." }
     Settings:
       type: object
       properties:

@@ -464,23 +464,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/me": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description The caller's account identity plus library stats (item count, bytes stored) for the app chrome. */
-        get: operations["getMe"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/settings": {
         parameters: {
             query?: never;
@@ -726,17 +709,6 @@ export interface components {
             /** @description The full API key — shown exactly once. */
             key: string;
             name: string;
-        };
-        Me: {
-            /** @description The account e-mail; empty string when the self-hosted account has none set. */
-            email: string;
-            /** @description Items currently saved. */
-            itemCount: number;
-            /**
-             * Format: int64
-             * @description Approximate bytes stored: extracted item bodies plus uploaded asset sizes.
-             */
-            storageBytes: number;
         };
         Settings: {
             /**
@@ -1877,26 +1849,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceLinkCreated"];
-                };
-            };
-        };
-    };
-    getMe: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description account overview */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Me"];
                 };
             };
         };

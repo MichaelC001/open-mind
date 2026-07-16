@@ -17,6 +17,7 @@ const countDriftCandidates = `-- name: CountDriftCandidates :one
 SELECT count(*) FROM items
 WHERE user_id = $1 AND status = 'enriched' AND pinned_at IS NULL
   AND (last_drifted_at IS NULL OR last_drifted_at < now() - interval '30 days')
+  AND (feed_id IS NULL OR kept_at IS NOT NULL)
 `
 
 func (q *Queries) CountDriftCandidates(ctx context.Context, userID uuid.UUID) (int64, error) {

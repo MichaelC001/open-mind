@@ -330,18 +330,6 @@ type LensRule struct {
 // LensRuleTypes defines model for LensRule.Types.
 type LensRuleTypes string
 
-// Me defines model for Me.
-type Me struct {
-	// Email The account e-mail; empty string when the self-hosted account has none set.
-	Email string `json:"email"`
-
-	// ItemCount Items currently saved.
-	ItemCount int `json:"itemCount"`
-
-	// StorageBytes Approximate bytes stored: extracted item bodies plus uploaded asset sizes.
-	StorageBytes int64 `json:"storageBytes"`
-}
-
 // PatchSettingsRequest defines model for PatchSettingsRequest.
 type PatchSettingsRequest struct {
 	KindleEmail *openapi_types.Email `json:"kindleEmail,omitempty"`
@@ -593,9 +581,6 @@ type ServerInterface interface {
 	// (POST /lenses/{id}/kindle)
 	SendLensToKindle(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 
-	// (GET /me)
-	GetMe(w http.ResponseWriter, r *http.Request)
-
 	// (GET /search)
 	SearchItems(w http.ResponseWriter, r *http.Request, params SearchItemsParams)
 
@@ -797,11 +782,6 @@ func (_ Unimplemented) GetLensItems(w http.ResponseWriter, r *http.Request, id o
 // Send this Lens's current matches to Kindle as a digest EPUB
 // (POST /lenses/{id}/kindle)
 func (_ Unimplemented) SendLensToKindle(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// (GET /me)
-func (_ Unimplemented) GetMe(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1820,26 +1800,6 @@ func (siw *ServerInterfaceWrapper) SendLensToKindle(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
-// GetMe operation middleware
-func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request) {
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetMe(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // SearchItems operation middleware
 func (siw *ServerInterfaceWrapper) SearchItems(w http.ResponseWriter, r *http.Request) {
 
@@ -2152,9 +2112,6 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/lenses/{id}/kindle", wrapper.SendLensToKindle)
-	})
-	r.Group(func(r chi.Router) {
-		r.Get(options.BaseURL+"/me", wrapper.GetMe)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/search", wrapper.SearchItems)

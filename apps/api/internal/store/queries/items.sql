@@ -64,7 +64,8 @@ LIMIT $2;
 -- name: CountDriftCandidates :one
 SELECT count(*) FROM items
 WHERE user_id = $1 AND status = 'enriched' AND pinned_at IS NULL
-  AND (last_drifted_at IS NULL OR last_drifted_at < now() - interval '30 days');
+  AND (last_drifted_at IS NULL OR last_drifted_at < now() - interval '30 days')
+  AND (feed_id IS NULL OR kept_at IS NOT NULL);
 
 -- name: DriftAction :execrows
 UPDATE items
