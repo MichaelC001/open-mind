@@ -287,3 +287,69 @@ func TestLensItemsIsLiveView(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+// TestLensTypesOnlyIncludesUnkeptFeedItem proves the user decision that
+// Lenses include unkept feed items on every rule path. Text/colour rules
+// already see everything because they run through search.Run; this exercises
+// the types-only path (ListItemsAll, not ListItems) and confirms GET /items
+// (the Mind) still excludes the same unkept feed item.
+func TestLensTypesOnlyIncludesUnkeptFeedItem(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+
+	feed := seedFeed(t, s, api.DevUserID, "https://example.com/rss.xml")
+	feedItem := seedFeedItem(t, s, api.DevUserID, feed.ID, "https://example.com/unkept-post")
+	if _, err := s.Pool.Exec(ctx, `UPDATE items SET card_type='article' WHERE id=$1`, feedItem.ID); err != nil {
+		t.Fatalf("set feed item type: %v", err)
+	}
+
+	resp := postJSON(t, srv.URL+"/lenses", `{"name":"Articles","rule":{"types":["article"]}}`)
+	var lens lensResp
+	json.NewDecoder(resp.Body).Decode(&lens)
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/lenses/"+lens.ID+"/items", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("items status = %d, want 200", resp.StatusCode)
+	}
+	var out struct {
+		Results []struct {
+			Item struct {
+				Id string `json:"id"`
+			} `json:"item"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode items: %v", err)
+	}
+	resp.Body.Close()
+	found := false
+	for _, r := range out.Results {
+		if r.Item.Id == feedItem.ID.String() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("lens results = %+v, want unkept feed item %s included", out.Results, feedItem.ID)
+	}
+
+	// GET /items (the Mind) must still exclude the unkept feed item.
+	itemsResp := doJSON(t, http.MethodGet, srv.URL+"/items", "")
+	if itemsResp.StatusCode != http.StatusOK {
+		t.Fatalf("items status = %d, want 200", itemsResp.StatusCode)
+	}
+	var homeItems []struct {
+		Id string `json:"id"`
+	}
+	if err := json.NewDecoder(itemsResp.Body).Decode(&homeItems); err != nil {
+		t.Fatalf("decode home items: %v", err)
+	}
+	itemsResp.Body.Close()
+	for _, r := range homeItems {
+		if r.Id == feedItem.ID.String() {
+			t.Fatalf("GET /items included unkept feed item %s, want excluded", feedItem.ID)
+		}
+	}
+}

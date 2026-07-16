@@ -465,6 +465,62 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, e
 	return items, nil
 }
 
+const listItemsAll = `-- name: ListItemsAll :many
+SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at FROM items
+WHERE user_id = $1
+ORDER BY created_at DESC LIMIT $2
+`
+
+type ListItemsAllParams struct {
+	UserID uuid.UUID
+	Limit  int32
+}
+
+// Same as ListItems but without the Mind predicate: serves the types-only
+// Lens rule path, which deliberately spans the feed river so Lenses (and
+// Kindle Lens digests) include unkept feed items, matching the text/colour
+// rule path (which runs through search and already sees everything).
+func (q *Queries) ListItemsAll(ctx context.Context, arg ListItemsAllParams) ([]Item, error) {
+	rows, err := q.db.Query(ctx, listItemsAll, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Item
+	for rows.Next() {
+		var i Item
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Url,
+			&i.Title,
+			&i.Body,
+			&i.LeadImageUrl,
+			&i.Summary,
+			&i.Tags,
+			&i.CardType,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Palette,
+			&i.UserTags,
+			&i.PinnedAt,
+			&i.LastDriftedAt,
+			&i.SearchTsv,
+			&i.PageCount,
+			&i.FeedID,
+			&i.KeptAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listItemsForExport = `-- name: ListItemsForExport :many
 SELECT id, user_id, url, title, body, lead_image_url, summary, tags, card_type, status, created_at, updated_at, palette, user_tags, pinned_at, last_drifted_at, search_tsv, page_count, feed_id, kept_at FROM items WHERE user_id = $1 ORDER BY created_at ASC
 `

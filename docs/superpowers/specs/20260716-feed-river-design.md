@@ -18,6 +18,12 @@ the user wants them separate. Approved shape: "option 1 + promotion".
   the item then also appears in The Mind (and Drift) while remaining in the
   Feed river with provenance intact. Unkeep clears it. Pin/tags/links/
   Lenses/Kindle keep working on feed items unchanged.
+- **Lenses (and Kindle Lens digests) include unkept feed items on all rule
+  paths** (user decision) — the digest is the curated slice of the
+  firehose. This holds for both rule shapes: text/colour rules already
+  see everything because they run through `search.Run`; the types-only
+  rule now runs through `ListItemsAll` (no Mind predicate) instead of
+  `ListItems`, so it matches.
 
 ## Schema (migration, next free number)
 
@@ -81,6 +87,14 @@ next poll re-backfill them with `feed_id` set (URL dedup prevents dupes
 only for surviving rows, so deletion must precede the poll). Run as a
 reviewed SQL script during deploy; the design doc's operator step, not a
 migration.
+
+The shipped script (`scripts/one-off/20260716-feedriver-adopt.sql`) instead
+**adopts these rows in place** (`UPDATE items SET feed_id = f.id ...`)
+rather than delete-and-repoll: it's safer, since it can't lose an item to a
+missed re-poll or a feed that's since gone quiet, and it preserves any
+tags/pins/links a user already added. Host matching is anchored (host
+equality, not substring) to avoid false positives; preview the SELECT
+before running the UPDATE.
 
 ## Testing
 

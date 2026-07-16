@@ -12,6 +12,15 @@ SELECT * FROM items
 WHERE user_id = $1 AND (feed_id IS NULL OR kept_at IS NOT NULL)
 ORDER BY created_at DESC LIMIT $2;
 
+-- name: ListItemsAll :many
+-- Same as ListItems but without the Mind predicate: serves the types-only
+-- Lens rule path, which deliberately spans the feed river so Lenses (and
+-- Kindle Lens digests) include unkept feed items, matching the text/colour
+-- rule path (which runs through search and already sees everything).
+SELECT * FROM items
+WHERE user_id = $1
+ORDER BY created_at DESC LIMIT $2;
+
 -- name: CreateFeedItem :one
 INSERT INTO items (user_id, url, feed_id) VALUES ($1, $2, $3) RETURNING *;
 
