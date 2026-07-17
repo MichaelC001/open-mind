@@ -11,6 +11,10 @@ func TestClassify(t *testing.T) {
 		{"tweet", "https://x.com/user/status/123", "tweet"},
 		{"twitter", "https://twitter.com/user/status/123", "tweet"},
 		{"image ext", "https://cdn.site.com/photo.jpg", "image"},
+		{"instagram reel", "https://www.instagram.com/reel/Cabc123/", "video"},
+		{"instagram short link", "https://instagr.am/p/Cabc123/", "video"},
+		{"tiktok", "https://www.tiktok.com/@user/video/123", "video"},
+		{"tiktok share link", "https://vm.tiktok.com/ZM123/", "video"},
 		{"default article", "https://blog.example.com/post", "article"},
 	}
 	for _, tt := range tests {

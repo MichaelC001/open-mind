@@ -142,3 +142,10 @@ func (c *Chain) ParseQuery(ctx context.Context, q string) (ParsedQuery, error) {
 		return p.ParseQuery(ctx, q)
 	})
 }
+
+// ExtractPlaces tries each provider in order until one returns places.
+func (c *Chain) ExtractPlaces(ctx context.Context, title, caption string) ([]Place, error) {
+	return runChain(ctx, c, "extractplaces", func(p Provider) ([]Place, error) {
+		return p.ExtractPlaces(ctx, title, caption)
+	})
+}

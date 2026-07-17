@@ -32,6 +32,9 @@ func Classify(rawURL string, _ Extraction) string {
 	case "x.com", "twitter.com", "mobile.twitter.com":
 		return "tweet"
 	}
+	if _, ok := socialVideoHosts[host]; ok {
+		return "video"
+	}
 
 	if imageExts[strings.ToLower(path.Ext(parsed.Path))] {
 		return "image"

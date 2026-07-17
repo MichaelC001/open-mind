@@ -75,6 +75,14 @@ func (p *Pipeline) Run(ctx context.Context, userID, itemID uuid.UUID) error {
 		return p.runNote(ctx, userID, item)
 	}
 
+	// Social-video pages (Instagram reels, TikToks) are JS-rendered and often
+	// login-walled, so the article extractor gets nothing useful from them.
+	// Route them to the OG-tag path, which never fails the item — a fetch
+	// error degrades to a bare video card.
+	if IsSocialVideoURL(item.Url) {
+		return p.runSocialVideo(ctx, userID, item)
+	}
+
 	// Image URLs bypass the extractor entirely: there is no article to pull, so
 	// we render the image directly as an image card. The sniff never fails the
 	// job — an inconclusive result falls through to normal extraction.

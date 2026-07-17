@@ -15,6 +15,7 @@ type stub struct {
 	tags    []string
 	vec     []float32
 	query   ParsedQuery
+	places  []Place
 	err     error
 	calls   int
 }
@@ -39,6 +40,11 @@ func (s *stub) Embed(context.Context, string) ([]float32, error) {
 func (s *stub) ParseQuery(context.Context, string) (ParsedQuery, error) {
 	s.calls++
 	return s.query, s.err
+}
+
+func (s *stub) ExtractPlaces(context.Context, string, string) ([]Place, error) {
+	s.calls++
+	return s.places, s.err
 }
 
 func TestChainFalloverOnRetryable(t *testing.T) {

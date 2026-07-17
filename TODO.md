@@ -10,6 +10,9 @@
 - (see Issues)
 
 ## Later
+- Reel places Phase 2–4: thumbnail vision, web/mobile Places UI + map view,
+  MCP tool, optional yt-dlp deep media — see
+  `docs/superpowers/specs/20260716-reel-places-design.md`
 - Lossless AVIF metadata stripping / re-allow AVIF uploads
 - Omnivore import slice B: ingest archived content from export zips so dead links survive
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation

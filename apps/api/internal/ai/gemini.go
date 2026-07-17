@@ -109,6 +109,46 @@ func (g *Gemini) ParseQuery(ctx context.Context, q string) (ParsedQuery, error) 
 	}, nil
 }
 
+// ExtractPlaces pulls the visitable places named in a video caption via a
+// JSON-mode call with a response schema, so the model can only answer in the
+// expected shape.
+func (g *Gemini) ExtractPlaces(ctx context.Context, title, caption string) ([]Place, error) {
+	cfg := &genai.GenerateContentConfig{
+		ResponseMIMEType: "application/json",
+		ResponseSchema: &genai.Schema{
+			Type: genai.TypeObject,
+			Properties: map[string]*genai.Schema{
+				"places": {Type: genai.TypeArray, Items: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"name": {Type: genai.TypeString},
+						"hint": {Type: genai.TypeString},
+					},
+				}},
+			},
+		},
+	}
+	prompt := fmt.Sprintf("%s\n\nTitle: %s\nCaption: %s", extractPlacesInstruction, truncate(title, 500), truncate(caption, 8000))
+	resp, err := g.client.Models.GenerateContent(ctx, geminiGenModel, genai.Text(prompt), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("gemini extractplaces: %w", classifyGeminiErr(err))
+	}
+	var parsed struct {
+		Places []struct {
+			Name string `json:"name"`
+			Hint string `json:"hint"`
+		} `json:"places"`
+	}
+	if err := json.Unmarshal([]byte(resp.Text()), &parsed); err != nil {
+		return nil, fmt.Errorf("parsing gemini places: %w", err)
+	}
+	places := make([]Place, 0, len(parsed.Places))
+	for _, p := range parsed.Places {
+		places = append(places, Place{Name: p.Name, Hint: p.Hint})
+	}
+	return sanitisePlaces(places), nil
+}
+
 // classifyGeminiErr inspects a genai SDK error and wraps it as a
 // RetryableError when it represents a transient failure (429 or 5xx), so the
 // fallback chain knows to fail over to the next provider. genai.APIError

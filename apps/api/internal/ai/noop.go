@@ -22,3 +22,7 @@ func (*Noop) Embed(context.Context, string) ([]float32, error) { return nil, Err
 func (*Noop) ParseQuery(_ context.Context, q string) (ParsedQuery, error) {
 	return ParsedQuery{Text: q}, nil
 }
+
+func (*Noop) ExtractPlaces(context.Context, string, string) ([]Place, error) {
+	return nil, ErrNotSupported
+}
