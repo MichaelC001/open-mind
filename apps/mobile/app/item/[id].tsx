@@ -22,7 +22,7 @@ import {
 import MapView, { Marker } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
-import { ApiError, getItem, getItemPlaces, type ItemDetail, type Place } from "@/lib/api";
+import { ApiError, getItem, getItemPlaces, sendItemToKindle, type ItemDetail, type Place } from "@/lib/api";
 import { cardKind } from "@/lib/cards";
 import { useDeleteItem, useKeepItem, usePinItem } from "@/lib/mutations";
 import { queryKeys } from "@/lib/query";
@@ -59,7 +59,7 @@ export default function ItemScreen() {
   const pinItem = usePinItem();
   const keepItem = useKeepItem();
   const deleteItemFn = useDeleteItem();
-  const [busy, setBusy] = useState<"pin" | "keep" | null>(null);
+  const [busy, setBusy] = useState<"pin" | "keep" | "kindle" | null>(null);
 
   const itemId = typeof id === "string" ? id : "";
 
@@ -129,6 +129,27 @@ export default function ItemScreen() {
     });
   }, [item]);
 
+  const onKindle = useCallback(() => {
+    if (!item) return;
+    void (async () => {
+      setBusy("kindle");
+      const res = await sendItemToKindle(item.id);
+      setBusy(null);
+      if (res.ok) {
+        Alert.alert("Queued", "On its way to your Kindle.");
+      } else if (res.status === 409) {
+        Alert.alert(
+          "Kindle not set up",
+          "Add your Kindle address in the web app's Settings first.",
+        );
+      } else if (res.status === 422) {
+        Alert.alert("Nothing to send", "This item has no archived text to build an EPUB from.");
+      } else {
+        Alert.alert("Couldn't send", "Sending to Kindle failed — try again in a moment.");
+      }
+    })();
+  }, [item]);
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -173,6 +194,8 @@ export default function ItemScreen() {
         places={placesQuery.data ?? []}
         onCopyLink={onCopyLink}
         onShare={onShare}
+        onKindle={onKindle}
+        kindleBusy={busy === "kindle"}
       />
     </SafeAreaView>
   );
@@ -247,6 +270,8 @@ function Body({
   places,
   onCopyLink,
   onShare,
+  onKindle,
+  kindleBusy,
 }: {
   isPending: boolean;
   error: string | null;
@@ -254,6 +279,8 @@ function Body({
   places: Place[];
   onCopyLink: () => void;
   onShare: () => void;
+  onKindle: () => void;
+  kindleBusy: boolean;
 }) {
   if (isPending) {
     return (
@@ -293,7 +320,9 @@ function Body({
           <PaletteDots dots={dots} />
         </View>
         {item.url ? <OpenOriginalPill url={item.url} /> : null}
-        {item.url ? <SecondaryActions onCopyLink={onCopyLink} onShare={onShare} /> : null}
+        {item.url ? (
+          <SecondaryActions onCopyLink={onCopyLink} onShare={onShare} onKindle={onKindle} kindleBusy={kindleBusy} />
+        ) : null}
         {tags.length > 0 ? <TagsRow tags={tags} /> : null}
         <PlacesSection places={places} />
       </ScrollView>
@@ -315,7 +344,9 @@ function Body({
       <Text style={styles.title}>{title || host || "Untitled"}</Text>
       {summary ? <Text style={styles.summary}>{summary}</Text> : null}
       {item.url ? <OpenOriginalPill url={item.url} /> : null}
-      {item.url ? <SecondaryActions onCopyLink={onCopyLink} onShare={onShare} /> : null}
+      {item.url ? (
+        <SecondaryActions onCopyLink={onCopyLink} onShare={onShare} onKindle={onKindle} kindleBusy={kindleBusy} />
+      ) : null}
       {tags.length > 0 ? <TagsRow tags={tags} /> : null}
       <PlacesSection places={places} />
       {paragraphs.length > 0 ? (
@@ -346,14 +377,21 @@ function OpenOriginalPill({ url }: { url: string }) {
 function SecondaryActions({
   onCopyLink,
   onShare,
+  onKindle,
+  kindleBusy,
 }: {
   onCopyLink: () => void;
   onShare: () => void;
+  onKindle: () => void;
+  kindleBusy: boolean;
 }) {
   return (
     <View style={styles.secondaryRow}>
       <Pressable onPress={onCopyLink} hitSlop={8} style={styles.secondaryPill}>
         <Text style={styles.secondaryText}>Copy link</Text>
+      </Pressable>
+      <Pressable onPress={onKindle} hitSlop={8} style={styles.secondaryPill} disabled={kindleBusy}>
+        <Text style={styles.secondaryText}>{kindleBusy ? "Sending…" : "Send to Kindle"}</Text>
       </Pressable>
       <Pressable onPress={onShare} hitSlop={8} style={styles.secondaryPill}>
         <Text style={styles.secondaryText}>Share</Text>
