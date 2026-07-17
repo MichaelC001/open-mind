@@ -2,29 +2,29 @@
 // a web session (the API is reached with the device key, and "Open original"
 // goes to the public source URL). Mirrors the web reader's shape: kicker,
 // serif title, summary lead, archived body, tags.
+import { useQuery } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { openBrowserAsync } from "expo-web-browser";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { deleteItem, getItem, setKept, type ItemDetail } from "@/lib/api";
+import * as Clipboard from "expo-clipboard";
+import { ApiError, getItem, type ItemDetail } from "@/lib/api";
 import { cardKind } from "@/lib/cards";
+import { useDeleteItem, useKeepItem, usePinItem } from "@/lib/mutations";
+import { queryKeys } from "@/lib/query";
 import { colors, fonts, radius, spacing, typeGradients, type CardKind } from "@/lib/theme";
 import { stripMarkdown } from "@/lib/text";
-
-type State =
-  | { kind: "loading" }
-  | { kind: "ready"; item: ItemDetail }
-  | { kind: "error"; message: string };
 
 /** Types that get a gradient hero wash on the detail screen. */
 const HERO_KINDS: readonly CardKind[] = ["article", "image", "product", "book", "recipe", "video", "tweet"];
@@ -53,69 +53,67 @@ function PaletteDots({ dots }: { dots: string[] }) {
 export default function ItemScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const [state, setState] = useState<State>({ kind: "loading" });
-  const [deleting, setDeleting] = useState(false);
-  const [keeping, setKeeping] = useState(false);
+  const pinItem = usePinItem();
+  const keepItem = useKeepItem();
+  const deleteItemFn = useDeleteItem();
+  const [busy, setBusy] = useState<"pin" | "keep" | null>(null);
 
-  const onKeep = () => {
-    if (typeof id !== "string") return;
+  const itemId = typeof id === "string" ? id : "";
+
+  const itemQuery = useQuery({
+    queryKey: queryKeys.item(itemId),
+    enabled: itemId.length > 0,
+    queryFn: async () => {
+      const res = await getItem(itemId);
+      if (!res.ok || !res.item) throw new ApiError(res.status);
+      return res.item;
+    },
+    staleTime: 30_000,
+  });
+
+  const item = itemQuery.data;
+
+  const onPin = useCallback(() => {
+    if (!item) return;
     void (async () => {
-      setKeeping(true);
-      const res = await setKept(id, true);
-      setKeeping(false);
-      if (res.ok) {
-        setState((s) =>
-          s.kind === "ready" ? { kind: "ready", item: { ...s.item, keptAt: new Date().toISOString() } } : s,
-        );
-      } else {
-        Alert.alert("Couldn't keep", "Please try again.");
-      }
+      setBusy("pin");
+      // pinItem already patches the item + list caches (and rolls back on failure).
+      await pinItem(item);
+      setBusy(null);
     })();
-  };
+  }, [item, pinItem]);
 
-  const confirmDelete = () => {
-    if (typeof id !== "string") return;
-    Alert.alert("Delete this item?", "This can't be undone.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => {
-          void (async () => {
-            setDeleting(true);
-            const res = await deleteItem(id);
-            setDeleting(false);
-            if (res.ok) {
-              router.back();
-            } else {
-              Alert.alert("Couldn't delete", "Please try again.");
-            }
-          })();
-        },
-      },
-    ]);
-  };
-
-  useEffect(() => {
-    if (typeof id !== "string") return;
-    let cancelled = false;
+  const onKeep = useCallback(() => {
+    if (!item) return;
     void (async () => {
-      const res = await getItem(id);
-      if (cancelled) return;
-      if (res.ok && res.item) {
-        setState({ kind: "ready", item: res.item });
-      } else if (res.status === 0) {
-        setState({ kind: "error", message: "Instance unreachable — check your connection." });
-      } else if (res.status === 404) {
-        setState({ kind: "error", message: "This item no longer exists." });
-      } else {
-        setState({ kind: "error", message: "Couldn't load this item." });
-      }
+      setBusy("keep");
+      // keepItem already patches caches; do not re-flip from a stale closure.
+      await keepItem(item);
+      setBusy(null);
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
+  }, [item, keepItem]);
+
+  const onDelete = useCallback(() => {
+    if (!item) return;
+    deleteItemFn(item, () => {
+      router.back();
+    });
+  }, [item, deleteItemFn, router]);
+
+  const onCopyLink = useCallback(() => {
+    if (!item?.url) return;
+    void Clipboard.setStringAsync(item.url).then(() => {
+      Alert.alert("Copied", "Link copied to clipboard.");
+    });
+  }, [item]);
+
+  const onShare = useCallback(() => {
+    if (!item?.url) return;
+    void Share.share({
+      message: item.title?.trim() ? `${item.title.trim()}\n${item.url}` : item.url,
+      url: item.url,
+    });
+  }, [item]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
@@ -124,40 +122,75 @@ export default function ItemScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12}>
           <Text style={styles.back}>‹ Back</Text>
         </Pressable>
-        {state.kind === "ready" ? (
-          state.item.keptAt ? (
-            <Pressable onPress={confirmDelete} hitSlop={12} disabled={deleting}>
-              <Text style={styles.deleteAction}>{deleting ? "Deleting…" : "Delete"}</Text>
+        {item ? (
+          <View style={styles.topActions}>
+            <Pressable onPress={onPin} hitSlop={8} disabled={busy === "pin"}>
+              <Text style={[styles.pinAction, item.pinnedAt ? styles.pinActionActive : null]}>
+                {busy === "pin" ? "…" : item.pinnedAt ? "◆ Desk" : "◇ Pin"}
+              </Text>
             </Pressable>
-          ) : (
-            <Pressable onPress={onKeep} hitSlop={12} disabled={keeping}>
-              <Text style={styles.keepAction}>{keeping ? "Keeping…" : "Keep"}</Text>
+            {item.feedId ? (
+              <Pressable onPress={onKeep} hitSlop={8} disabled={busy === "keep"}>
+                <Text style={styles.keepAction}>
+                  {busy === "keep" ? "…" : item.keptAt ? "Unkeep" : "Keep"}
+                </Text>
+              </Pressable>
+            ) : null}
+            <Pressable onPress={onDelete} hitSlop={8}>
+              <Text style={styles.deleteAction}>Delete</Text>
             </Pressable>
-          )
+          </View>
         ) : null}
       </View>
-      <Body state={state} />
+      <Body
+        isPending={itemQuery.isPending && !item}
+        error={
+          itemQuery.isError
+            ? itemQuery.error instanceof ApiError
+              ? itemQuery.error.status === 0
+                ? "Instance unreachable — check your connection."
+                : itemQuery.error.status === 404
+                  ? "This item no longer exists."
+                  : "Couldn't load this item."
+              : "Couldn't load this item."
+            : null
+        }
+        item={item}
+        onCopyLink={onCopyLink}
+        onShare={onShare}
+      />
     </SafeAreaView>
   );
 }
 
-function Body({ state }: { state: State }) {
-  if (state.kind === "loading") {
+function Body({
+  isPending,
+  error,
+  item,
+  onCopyLink,
+  onShare,
+}: {
+  isPending: boolean;
+  error: string | null;
+  item?: ItemDetail;
+  onCopyLink: () => void;
+  onShare: () => void;
+}) {
+  if (isPending) {
     return (
       <View style={styles.centre}>
         <ActivityIndicator color={colors.cobalt} />
       </View>
     );
   }
-  if (state.kind === "error") {
+  if (error || !item) {
     return (
       <View style={styles.centre}>
-        <Text style={styles.errorText}>{state.message}</Text>
+        <Text style={styles.errorText}>{error ?? "Couldn't load this item."}</Text>
       </View>
     );
   }
 
-  const item = state.item;
   const host = hostOf(item.url);
   const kind = cardKind(item.cardType);
   const dots = item.palette ?? [];
@@ -181,6 +214,7 @@ function Body({ state }: { state: State }) {
           <PaletteDots dots={dots} />
         </View>
         {item.url ? <OpenOriginalPill url={item.url} /> : null}
+        {item.url ? <SecondaryActions onCopyLink={onCopyLink} onShare={onShare} /> : null}
         {tags.length > 0 ? <TagsRow tags={tags} /> : null}
       </ScrollView>
     );
@@ -201,6 +235,7 @@ function Body({ state }: { state: State }) {
       <Text style={styles.title}>{title || host || "Untitled"}</Text>
       {summary ? <Text style={styles.summary}>{summary}</Text> : null}
       {item.url ? <OpenOriginalPill url={item.url} /> : null}
+      {item.url ? <SecondaryActions onCopyLink={onCopyLink} onShare={onShare} /> : null}
       {tags.length > 0 ? <TagsRow tags={tags} /> : null}
       {paragraphs.length > 0 ? (
         <View style={styles.bodyBlock}>
@@ -227,6 +262,25 @@ function OpenOriginalPill({ url }: { url: string }) {
   );
 }
 
+function SecondaryActions({
+  onCopyLink,
+  onShare,
+}: {
+  onCopyLink: () => void;
+  onShare: () => void;
+}) {
+  return (
+    <View style={styles.secondaryRow}>
+      <Pressable onPress={onCopyLink} hitSlop={8} style={styles.secondaryPill}>
+        <Text style={styles.secondaryText}>Copy link</Text>
+      </Pressable>
+      <Pressable onPress={onShare} hitSlop={8} style={styles.secondaryPill}>
+        <Text style={styles.secondaryText}>Share</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function TagsRow({ tags }: { tags: string[] }) {
   return (
     <View style={styles.tagsRow}>
@@ -248,7 +302,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.md,
   },
+  topActions: { flexDirection: "row", alignItems: "center", gap: spacing.md },
   back: { color: colors.cobalt, fontFamily: fonts.sansSemiBold, fontSize: 15 },
+  pinAction: { color: colors.inkMuted, fontFamily: fonts.mono, fontSize: 13 },
+  pinActionActive: { color: colors.gold },
   deleteAction: { color: colors.danger, fontFamily: fonts.sansSemiBold, fontSize: 15 },
   keepAction: { color: colors.cobalt, fontFamily: fonts.sansSemiBold, fontSize: 15 },
   container: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl },
@@ -296,9 +353,24 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.sm,
   },
   openOriginalText: { color: colors.paper, fontFamily: fonts.sansSemiBold, fontSize: 13.5 },
+  secondaryRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  secondaryPill: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.canvas,
+  },
+  secondaryText: { fontFamily: fonts.sansMedium, fontSize: 13, color: colors.inkMuted },
   tagsRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.lg },
   tag: {
     backgroundColor: colors.canvas,

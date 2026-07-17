@@ -1,8 +1,8 @@
-import { Redirect, useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Redirect, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -14,11 +14,15 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ItemCard } from "@/components/ItemCard";
-import { deleteItem, listItems, searchItems, type Item, type UnderstoodQuery } from "@/lib/api";
+import { ApiError, listItems, searchItems, type Item, type UnderstoodQuery } from "@/lib/api";
 import { cardKind, KNOWN_KINDS, typeLabelPlural } from "@/lib/cards";
 import { useCaptureQueue } from "@/lib/capture-queue-context";
+import { showItemActions, useAndroidActionSheet } from "@/lib/item-actions";
+import { useDeleteItem, usePinItem } from "@/lib/mutations";
+import { queryKeys } from "@/lib/query";
 import { useSettingsContext } from "@/lib/settings-context";
 import { colors, fonts, radius, spacing, type CardKind } from "@/lib/theme";
+import { useSoftFocusRefetch } from "@/lib/use-soft-focus-refetch";
 
 /** Group items by cardType, in a stable KNOWN_KINDS order, dropping empty groups. */
 function groupByKind(items: Item[]): { kind: CardKind; items: Item[] }[] {
@@ -33,94 +37,52 @@ function groupByKind(items: Item[]): { kind: CardKind; items: Item[] }[] {
 }
 
 const SEARCH_DEBOUNCE_MS = 300;
+const LIST_LIMIT = 50;
 
-type LoadState =
-  | { kind: "loading" }
-  | { kind: "ready"; items: Item[]; understood?: UnderstoodQuery }
-  | { kind: "unreachable" }
-  | { kind: "search-offline" }
-  | { kind: "rejected" }
-  | { kind: "error" };
+type LibraryData = { items: Item[]; understood?: UnderstoodQuery };
 
 export default function LibraryScreen() {
   const router = useRouter();
   const { settings, configured, loading } = useSettingsContext();
   const { pendingCount, flush } = useCaptureQueue();
-  const [state, setState] = useState<LoadState>({ kind: "loading" });
-  const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [grouped, setGrouped] = useState(false);
-  const requestSeq = useRef(0);
+  const pinItem = usePinItem();
+  const deleteItem = useDeleteItem();
+  const { present, node: actionSheet } = useAndroidActionSheet();
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query.trim()), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [query]);
 
-  const load = useCallback(
-    async (isRefresh: boolean, q: string) => {
-      if (!settings) return;
-      const seq = ++requestSeq.current;
-      if (isRefresh) setRefreshing(true);
-      else setState({ kind: "loading" });
+  const searching = debouncedQuery.length > 0;
 
-      try {
-        if (q.length === 0) {
-          const res = await listItems(50);
-          if (seq !== requestSeq.current) return;
-          if (res.ok) {
-            setState({ kind: "ready", items: res.items });
-          } else if (res.status === 0) {
-            setState({ kind: "unreachable" });
-          } else if (res.status === 401) {
-            setState({ kind: "rejected" });
-          } else {
-            setState({ kind: "error" });
-          }
-        } else {
-          const res = await searchItems({ q, parse: true });
-          if (seq !== requestSeq.current) return;
-          if (res.ok) {
-            setState({
-              kind: "ready",
-              items: res.results.map((r) => r.item),
-              understood: res.understood,
-            });
-          } else if (res.status === 0) {
-            setState({ kind: "search-offline" });
-          } else if (res.status === 401) {
-            setState({ kind: "rejected" });
-          } else {
-            setState({ kind: "error" });
-          }
-        }
-      } finally {
-        // Always clear the pull-to-refresh spinner, even when a newer request
-        // superseded this one (stale seq early-return).
-        if (isRefresh) setRefreshing(false);
+  const listQuery = useQuery({
+    queryKey: searching ? queryKeys.search(debouncedQuery) : queryKeys.items(LIST_LIMIT),
+    enabled: !!settings && configured,
+    queryFn: async (): Promise<LibraryData> => {
+      if (!searching) {
+        const res = await listItems(LIST_LIMIT);
+        if (!res.ok) throw new ApiError(res.status);
+        return { items: res.items };
       }
+      const res = await searchItems({ q: debouncedQuery, parse: true });
+      if (!res.ok) throw new ApiError(res.status);
+      return {
+        items: res.results.map((r) => r.item),
+        understood: res.understood,
+      };
     },
-    [settings],
-  );
+    // Keep prior results visible while a new search key loads.
+    placeholderData: (prev) => prev,
+  });
 
-  // Keep a ref so focus-flush can reload the current query without re-binding
-  // when the debounce ticks (avoids a double fetch with the effect below).
-  const debouncedQueryRef = useRef(debouncedQuery);
-  debouncedQueryRef.current = debouncedQuery;
-
-  useFocusEffect(
-    useCallback(() => {
-      void flush();
-      if (settings) void load(false, debouncedQueryRef.current);
-    }, [settings, load, flush]),
-  );
-
-  // Re-run when the debounced query changes while the screen is mounted.
-  useEffect(() => {
-    if (settings) void load(false, debouncedQuery);
-  }, [settings, debouncedQuery, load]);
+  useSoftFocusRefetch(listQuery, () => {
+    void flush();
+  });
 
   const onOpen = useCallback(
     (item: Item) => {
@@ -129,36 +91,30 @@ export default function LibraryScreen() {
     [router],
   );
 
-  const onDelete = useCallback((item: Item) => {
-    Alert.alert(`Delete "${item.title?.trim() || item.url}"?`, "This can't be undone.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => {
-          void (async () => {
-            const res = await deleteItem(item.id);
-            if (res.ok) {
-              setState((s) =>
-                s.kind === "ready" ? { ...s, items: s.items.filter((i) => i.id !== item.id) } : s,
-              );
-            } else {
-              Alert.alert("Couldn't delete", "Please try again.");
-            }
-          })();
+  const onLongPress = useCallback(
+    (item: Item) => {
+      showItemActions(
+        item,
+        {
+          onOpen,
+          onPin: (it) => void pinItem(it),
+          onDelete: (it) => deleteItem(it),
         },
-      },
-    ]);
-  }, []);
+        present,
+      );
+    },
+    [onOpen, pinItem, deleteItem, present],
+  );
 
-  // Unconfigured guard: with no token stored, land on Settings.
   if (!loading && !configured) return <Redirect href="/settings" />;
 
-  const count = state.kind === "ready" ? state.items.length : 0;
-  const searching = debouncedQuery.length > 0;
+  const items = listQuery.data?.items ?? [];
+  const count = items.length;
+  const errStatus = listQuery.error instanceof ApiError ? listQuery.error.status : undefined;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
+      {actionSheet}
       <View style={styles.topHairline} />
       <View style={styles.header}>
         <View style={styles.titleRow}>
@@ -193,20 +149,23 @@ export default function LibraryScreen() {
             clearButtonMode="while-editing"
           />
         </View>
-        {state.kind === "ready" && state.understood ? (
-          <UnderstoodRow understood={state.understood} q={debouncedQuery} />
+        {listQuery.data?.understood ? (
+          <UnderstoodRow understood={listQuery.data.understood} q={debouncedQuery} />
         ) : null}
       </View>
       <Body
-        state={state}
-        settings={settings}
-        refreshing={refreshing}
+        isPending={listQuery.isPending && !listQuery.data}
+        isError={listQuery.isError}
+        errStatus={errStatus}
         searching={searching}
+        items={items}
+        settings={settings}
+        refreshing={listQuery.isRefetching && !listQuery.isPending}
         grouped={grouped && !searching}
-        onRefresh={() => void load(true, debouncedQuery)}
-        onRetry={() => void load(false, debouncedQuery)}
+        onRefresh={() => void listQuery.refetch()}
+        onRetry={() => void listQuery.refetch()}
         onOpen={onOpen}
-        onDelete={onDelete}
+        onLongPress={onLongPress}
       />
     </SafeAreaView>
   );
@@ -232,29 +191,35 @@ function UnderstoodRow({ understood, q }: { understood: UnderstoodQuery; q: stri
 }
 
 type BodyProps = {
-  state: LoadState;
+  isPending: boolean;
+  isError: boolean;
+  errStatus?: number;
+  searching: boolean;
+  items: Item[];
   settings: ReturnType<typeof useSettingsContext>["settings"];
   refreshing: boolean;
-  searching: boolean;
   grouped: boolean;
   onRefresh: () => void;
   onRetry: () => void;
   onOpen: (item: Item) => void;
-  onDelete: (item: Item) => void;
+  onLongPress: (item: Item) => void;
 };
 
 function Body({
-  state,
+  isPending,
+  isError,
+  errStatus,
+  searching,
+  items,
   settings,
   refreshing,
-  searching,
   grouped,
   onRefresh,
   onRetry,
   onOpen,
-  onDelete,
+  onLongPress,
 }: BodyProps) {
-  if (state.kind === "loading") {
+  if (isPending) {
     return (
       <View style={styles.centre}>
         <ActivityIndicator color={colors.cobalt} />
@@ -262,21 +227,22 @@ function Body({
     );
   }
 
-  if (state.kind === "unreachable") {
-    return (
-      <Message
-        text="Instance unreachable — check your connection or the URL in Settings."
-        onRetry={onRetry}
-      />
-    );
-  }
-  if (state.kind === "search-offline") {
-    return <Message text="Search needs a connection." onRetry={onRetry} />;
-  }
-  if (state.kind === "rejected") {
-    return <Message text="Token rejected — check Settings." onRetry={onRetry} />;
-  }
-  if (state.kind === "error") {
+  if (isError && items.length === 0) {
+    if (errStatus === 0) {
+      return (
+        <Message
+          text={
+            searching
+              ? "Search needs a connection."
+              : "Instance unreachable — check your connection or the URL in Settings."
+          }
+          onRetry={onRetry}
+        />
+      );
+    }
+    if (errStatus === 401) {
+      return <Message text="Token rejected — check Settings." onRetry={onRetry} />;
+    }
     return (
       <Message
         text={searching ? "Couldn't run that search." : "Couldn't load your library."}
@@ -295,16 +261,16 @@ function Body({
   );
 
   if (grouped) {
-    const sections = groupByKind(state.items).map(({ kind, items }) => ({
-      title: `${typeLabelPlural[kind]} · ${items.length}`,
-      data: items,
+    const sections = groupByKind(items).map(({ kind, items: sectionItems }) => ({
+      title: `${typeLabelPlural[kind]} · ${sectionItems.length}`,
+      data: sectionItems,
     }));
     return (
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onDelete} />
+          <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onLongPress} />
         )}
         renderSectionHeader={({ section }) => (
           <Text style={styles.sectionHeader}>{section.title}</Text>
@@ -319,10 +285,10 @@ function Body({
 
   return (
     <FlatList
-      data={state.items}
+      data={items}
       keyExtractor={(item) => item.id}
       renderItem={({ item }) => (
-        <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onDelete} />
+        <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onLongPress} />
       )}
       contentContainerStyle={styles.list}
       ItemSeparatorComponent={() => <View style={styles.separator} />}

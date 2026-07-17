@@ -21,7 +21,21 @@ export type Item = {
   tags?: string[];
   userTags?: string[];
   keptAt?: string | null;
+  /** When pinned to the Desk; null/undefined if not pinned. */
+  pinnedAt?: string | null;
+  /** Feed this item originated from; null if not feed-sourced. */
+  feedId?: string | null;
 };
+
+/** Thrown by list helpers when the HTTP call fails — status 0 = network. */
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message?: string) {
+    super(message ?? `Request failed (${status})`);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
 async function resolveSettings(override?: Settings): Promise<Settings | null> {
   return override ?? (await getSettings());
@@ -216,13 +230,32 @@ export async function setKept(
   kept: boolean,
   override?: Settings,
 ): Promise<{ ok: boolean; status: number; item?: Item }> {
+  return patchItem(itemId, { kept }, override);
+}
+
+/**
+ * Pin or unpin an item on the Desk via PATCH {instanceUrl}/api/items/{id} {pinned}.
+ */
+export async function setPinned(
+  itemId: string,
+  pinned: boolean,
+  override?: Settings,
+): Promise<{ ok: boolean; status: number; item?: Item }> {
+  return patchItem(itemId, { pinned }, override);
+}
+
+async function patchItem(
+  itemId: string,
+  body: { kept?: boolean; pinned?: boolean },
+  override?: Settings,
+): Promise<{ ok: boolean; status: number; item?: Item }> {
   const settings = await resolveSettings(override);
   if (!settings) return { ok: false, status: 0 };
   try {
     const res = await fetch(`${settings.instanceUrl}/api/items/${itemId}`, {
       method: "PATCH",
       headers: authHeaders(settings.token, true),
-      body: JSON.stringify({ kept }),
+      body: JSON.stringify(body),
     });
     let item: Item | undefined;
     if (res.ok) {
@@ -236,6 +269,38 @@ export async function setKept(
   } catch (err) {
     console.error(err);
     return { ok: false, status: 0 };
+  }
+}
+
+/**
+ * Desk pins via GET {instanceUrl}/api/desk — newest-pinned first.
+ */
+export async function listDesk(
+  override?: Settings,
+): Promise<{ ok: boolean; status: number; items: Item[] }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0, items: [] };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/desk`, {
+      method: "GET",
+      headers: authHeaders(settings.token),
+    });
+    let items: Item[] = [];
+    if (res.ok) {
+      try {
+        const data = (await res.json()) as unknown;
+        if (Array.isArray(data)) {
+          items = data as Item[];
+        } else if (data && Array.isArray((data as { items?: Item[] }).items)) {
+          items = (data as { items: Item[] }).items;
+        }
+      } catch {
+        items = [];
+      }
+    }
+    return { ok: res.ok, status: res.status, items };
+  } catch {
+    return { ok: false, status: 0, items: [] };
   }
 }
 
