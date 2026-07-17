@@ -125,7 +125,10 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, feedURL string) (db
 	}
 
 	polled := nowTS()
-	s.recordStatus(ctx, feed, "ok", etag, lastModified, nextPollInterval(pollFloor, added > 0, cacheMaxAge))
+	// Subscribing is a user signal of interest: always reset to the poll floor,
+	// even when backfill added zero entries (e.g. an empty or fully-deduped
+	// feed). Unlike Refresh, added==0 here must not double the interval.
+	s.recordStatus(ctx, feed, "ok", etag, lastModified, nextPollInterval(pollFloor, true, cacheMaxAge))
 	feed.LastPolledAt, feed.LastStatus = polled, "ok"
 	feed.Etag, feed.LastModified = etag, lastModified
 	return feed, added, nil

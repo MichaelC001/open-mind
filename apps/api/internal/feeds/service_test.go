@@ -467,6 +467,39 @@ func TestFeedAddSetsInitialSchedule(t *testing.T) {
 	assertNextPollAt(t, got.NextPollAt, before, 30*time.Minute)
 }
 
+func TestFeedAddZeroBackfillStartsAtFloor(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	uid := newUser(t, s)
+
+	// Feed publishes no entries at all: backfill adds nothing.
+	var entries atomic.Pointer[[]string]
+	entries.Store(&[]string{})
+	srv := rssServer(t, &entries)
+	s.HTTPClient = srv.Client()
+
+	before := time.Now()
+	feed, added, err := s.Add(ctx, uid, srv.URL)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if added != 0 {
+		t.Fatalf("added = %d, want 0", added)
+	}
+
+	got, err := s.Store.Queries.GetFeed(ctx, db.GetFeedParams{UserID: uid, ID: feed.ID})
+	if err != nil {
+		t.Fatalf("get feed: %v", err)
+	}
+	// Subscribing is a user signal of interest, so even a zero-entry backfill
+	// must start at the 30-minute floor, not double to 60 (added==0 is only
+	// meaningful for Refresh's steady-state backoff).
+	if got.PollIntervalMinutes != 30 {
+		t.Errorf("poll_interval_minutes = %d, want 30 (subscribe always resets to the floor)", got.PollIntervalMinutes)
+	}
+	assertNextPollAt(t, got.NextPollAt, before, 30*time.Minute)
+}
+
 func TestFeedRefreshDoublesIntervalWhenUnchanged(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
