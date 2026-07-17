@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { PressScale } from "@/components/PressScale";
 import { listItems, saveItem } from "@/lib/api";
 import { useCaptureQueue } from "@/lib/capture-queue-context";
+import { useInvalidateLists } from "@/lib/mutations";
 import { useSettingsContext } from "@/lib/settings-context";
 import { colors, fonts, radius, spacing } from "@/lib/theme";
 
@@ -49,6 +50,7 @@ async function wasRecentlySaved(url: string, attemptStartedAt: number): Promise<
 export default function CaptureScreen() {
   const { configured, loading } = useSettingsContext();
   const { pendingCount, flushing, enqueue, flush } = useCaptureQueue();
+  const invalidateLists = useInvalidateLists();
   const params = useLocalSearchParams<{ shared?: string }>();
   const [text, setText] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -87,10 +89,12 @@ export default function CaptureScreen() {
     if (res.ok) {
       setText("");
       setStatus({ kind: "saved" });
+      invalidateLists();
     } else if (res.status === 0) {
       if (url && (await wasRecentlySaved(value, attemptStartedAt))) {
         setText("");
         setStatus({ kind: "saved", recovered: true });
+        invalidateLists();
         return;
       }
       // Durable offline queue — clear the field so the user can keep capturing.
@@ -106,6 +110,9 @@ export default function CaptureScreen() {
 
   async function onSyncNow() {
     const result = await flush();
+    if (result.sent > 0) {
+      invalidateLists();
+    }
     if (result.sent > 0 && result.remaining === 0) {
       setStatus({ kind: "saved" });
     }

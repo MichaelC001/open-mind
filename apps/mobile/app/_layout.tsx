@@ -14,6 +14,7 @@ import { useEffect } from "react";
 import { View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { CaptureQueueProvider } from "@/lib/capture-queue-context";
+import { QueryProvider } from "@/lib/query";
 import { SettingsProvider } from "@/lib/settings-context";
 import { colors } from "@/lib/theme";
 
@@ -66,20 +67,22 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <SettingsProvider>
-        <CaptureQueueProvider>
-          <StatusBar style="dark" />
-          <ShareIntentGate />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: colors.canvas },
-            }}
-          >
-            <Stack.Screen name="(tabs)" />
-          </Stack>
-        </CaptureQueueProvider>
-      </SettingsProvider>
+      <QueryProvider>
+        <SettingsProvider>
+          <CaptureQueueProvider>
+            <StatusBar style="dark" />
+            <ShareIntentGate />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: colors.canvas },
+              }}
+            >
+              <Stack.Screen name="(tabs)" />
+            </Stack>
+          </CaptureQueueProvider>
+        </SettingsProvider>
+      </QueryProvider>
     </SafeAreaProvider>
   );
 }

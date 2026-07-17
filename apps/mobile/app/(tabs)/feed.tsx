@@ -1,4 +1,5 @@
-import { Redirect, useFocusEffect, useRouter } from "expo-router";
+import { useQuery } from "@tanstack/react-query";
+import { Redirect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
@@ -10,17 +11,16 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { listFeedItems, setKept, type Item } from "@/lib/api";
+import { ApiError, listFeedItems, type Item } from "@/lib/api";
+import { showItemActions, useAndroidActionSheet } from "@/lib/item-actions";
+import { useKeepItem, usePinItem } from "@/lib/mutations";
+import { queryKeys } from "@/lib/query";
 import { useSettingsContext } from "@/lib/settings-context";
 import { colors, fonts, radius, spacing } from "@/lib/theme";
 import { stripMarkdown } from "@/lib/text";
+import { useSoftFocusRefetch } from "@/lib/use-soft-focus-refetch";
 
-type LoadState =
-  | { kind: "loading" }
-  | { kind: "ready"; items: Item[] }
-  | { kind: "unreachable" }
-  | { kind: "rejected" }
-  | { kind: "error" };
+const LIST_LIMIT = 50;
 
 /** Coarse relative-time label ("just now", "3h ago", "5d ago") from an ISO timestamp. */
 function relativeTime(iso: string | undefined): string {
@@ -46,61 +46,38 @@ function relativeTime(iso: string | undefined): string {
 export default function FeedScreen() {
   const router = useRouter();
   const { settings, configured, loading } = useSettingsContext();
-  const [state, setState] = useState<LoadState>({ kind: "loading" });
-  const [refreshing, setRefreshing] = useState(false);
   const [pendingKeepIds, setPendingKeepIds] = useState<Set<string>>(new Set());
-  const [keepError, setKeepError] = useState<"rejected" | "error" | null>(null);
+  const keepItem = useKeepItem();
+  const pinItem = usePinItem();
+  const { present, node: actionSheet } = useAndroidActionSheet();
 
-  const load = useCallback(
-    async (isRefresh: boolean) => {
-      if (!settings) return;
-      if (isRefresh) setRefreshing(true);
-      else setState({ kind: "loading" });
-      const res = await listFeedItems(50);
-      if (res.ok) {
-        setState({ kind: "ready", items: res.items });
-      } else if (res.status === 0) {
-        setState({ kind: "unreachable" });
-      } else if (res.status === 401) {
-        setState({ kind: "rejected" });
-      } else {
-        setState({ kind: "error" });
-      }
-      if (isRefresh) setRefreshing(false);
+  const feedQuery = useQuery({
+    queryKey: queryKeys.feed(LIST_LIMIT),
+    enabled: !!settings && configured,
+    queryFn: async () => {
+      const res = await listFeedItems(LIST_LIMIT);
+      if (!res.ok) throw new ApiError(res.status);
+      return res.items;
     },
-    [settings],
-  );
+  });
 
-  useFocusEffect(
-    useCallback(() => {
-      if (settings) void load(false);
-    }, [settings, load]),
-  );
+  useSoftFocusRefetch(feedQuery);
 
-  const onToggleKeep = useCallback(async (item: Item) => {
-    const nextKept = !item.keptAt;
-    setKeepError(null);
-    setPendingKeepIds((prev) => new Set(prev).add(item.id));
-    const res = await setKept(item.id, nextKept);
-    setPendingKeepIds((prev) => {
-      const next = new Set(prev);
-      next.delete(item.id);
-      return next;
-    });
-    if (!res.ok) {
-      setKeepError(res.status === 401 ? "rejected" : "error");
-      return;
-    }
-    setState((prev) => {
-      if (prev.kind !== "ready") return prev;
-      return {
-        kind: "ready",
-        items: prev.items.map((it) =>
-          it.id === item.id ? { ...it, keptAt: nextKept ? new Date().toISOString() : null } : it,
-        ),
-      };
-    });
-  }, []);
+  const onToggleKeep = useCallback(
+    async (item: Item) => {
+      setPendingKeepIds((prev) => new Set(prev).add(item.id));
+      try {
+        await keepItem(item);
+      } finally {
+        setPendingKeepIds((prev) => {
+          const next = new Set(prev);
+          next.delete(item.id);
+          return next;
+        });
+      }
+    },
+    [keepItem],
+  );
 
   const onOpen = useCallback(
     (item: Item) => {
@@ -109,60 +86,82 @@ export default function FeedScreen() {
     [router],
   );
 
-  // Unconfigured guard: with no token stored, land on Settings.
+  const onLongPress = useCallback(
+    (item: Item) => {
+      showItemActions(
+        item,
+        {
+          onOpen,
+          onPin: (it) => void pinItem(it),
+          onKeep: (it) => void onToggleKeep(it),
+        },
+        present,
+      );
+    },
+    [onOpen, pinItem, onToggleKeep, present],
+  );
+
   if (!loading && !configured) return <Redirect href="/settings" />;
 
-  const count = state.kind === "ready" ? state.items.length : 0;
+  const items = feedQuery.data ?? [];
+  const count = items.length;
+  const errStatus = feedQuery.error instanceof ApiError ? feedQuery.error.status : undefined;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
+      {actionSheet}
       <View style={styles.topHairline} />
       <View style={styles.header}>
         <Text style={styles.title}>Feed</Text>
         <Text style={styles.subtitle}>
           {count} {count === 1 ? "item" : "items"} · from your subscribed feeds
         </Text>
-        {keepError ? (
-          <Text style={styles.keepErrorText}>
-            {keepError === "rejected"
-              ? "Token rejected — check Settings."
-              : "Couldn't update — try again."}
-          </Text>
-        ) : null}
       </View>
       <Body
-        state={state}
-        refreshing={refreshing}
+        isPending={feedQuery.isPending && !feedQuery.data}
+        isError={feedQuery.isError}
+        errStatus={errStatus}
+        items={items}
+        refreshing={feedQuery.isRefetching && !feedQuery.isPending}
         pendingKeepIds={pendingKeepIds}
-        onRefresh={() => void load(true)}
-        onRetry={() => void load(false)}
+        onRefresh={() => void feedQuery.refetch()}
+        onRetry={() => void feedQuery.refetch()}
         onToggleKeep={onToggleKeep}
         onOpen={onOpen}
+        onLongPress={onLongPress}
       />
     </SafeAreaView>
   );
 }
 
 type BodyProps = {
-  state: LoadState;
+  isPending: boolean;
+  isError: boolean;
+  errStatus?: number;
+  items: Item[];
   refreshing: boolean;
   pendingKeepIds: Set<string>;
   onRefresh: () => void;
   onRetry: () => void;
   onToggleKeep: (item: Item) => void;
   onOpen: (item: Item) => void;
+  onLongPress: (item: Item) => void;
 };
 
 function Body({
-  state,
+  isPending,
+  isError,
+  errStatus,
+  items,
   refreshing,
   pendingKeepIds,
   onRefresh,
   onRetry,
   onToggleKeep,
   onOpen,
+  onLongPress,
 }: BodyProps) {
-  if (state.kind === "loading") {
+  if (isPending) {
     return (
       <View style={styles.centre}>
         <ActivityIndicator color={colors.cobalt} />
@@ -170,24 +169,24 @@ function Body({
     );
   }
 
-  if (state.kind === "unreachable") {
-    return (
-      <Message
-        text="Instance unreachable — check your connection or the URL in Settings."
-        onRetry={onRetry}
-      />
-    );
-  }
-  if (state.kind === "rejected") {
-    return <Message text="Token rejected — check Settings." onRetry={onRetry} />;
-  }
-  if (state.kind === "error") {
+  if (isError && items.length === 0) {
+    if (errStatus === 0) {
+      return (
+        <Message
+          text="Instance unreachable — check your connection or the URL in Settings."
+          onRetry={onRetry}
+        />
+      );
+    }
+    if (errStatus === 401) {
+      return <Message text="Token rejected — check Settings." onRetry={onRetry} />;
+    }
     return <Message text="Couldn't load your feed." onRetry={onRetry} />;
   }
 
   return (
     <FlatList
-      data={state.items}
+      data={items}
       keyExtractor={(item) => item.id}
       renderItem={({ item }) => (
         <FeedRow
@@ -195,6 +194,7 @@ function Body({
           pending={pendingKeepIds.has(item.id)}
           onToggleKeep={() => onToggleKeep(item)}
           onOpen={() => onOpen(item)}
+          onLongPress={() => onLongPress(item)}
         />
       )}
       contentContainerStyle={styles.list}
@@ -214,28 +214,39 @@ function FeedRow({
   pending,
   onToggleKeep,
   onOpen,
+  onLongPress,
 }: {
   item: Item;
   pending: boolean;
   onToggleKeep: () => void;
   onOpen: () => void;
+  onLongPress: () => void;
 }) {
   const kept = !!item.keptAt;
+  const pinned = !!item.pinnedAt;
   const title = stripMarkdown(item.title?.trim()) || item.url || "Untitled";
   const summary = stripMarkdown(item.summary);
   return (
-    <View style={styles.row}>
-      <Pressable style={styles.rowText} onPress={onOpen} hitSlop={4}>
-        <Text style={styles.rowTitle} numberOfLines={2}>
-          {title}
-        </Text>
+    <Pressable
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      onPress={onOpen}
+      onLongPress={onLongPress}
+      delayLongPress={350}
+    >
+      <View style={styles.rowText}>
+        <View style={styles.rowTitleRow}>
+          <Text style={styles.rowTitle} numberOfLines={2}>
+            {title}
+          </Text>
+          {pinned ? <Text style={styles.pinMark}>◆</Text> : null}
+        </View>
         {summary ? (
           <Text style={styles.rowSummary} numberOfLines={2}>
             {summary}
           </Text>
         ) : null}
         <Text style={styles.rowMeta}>{relativeTime(item.createdAt)}</Text>
-      </Pressable>
+      </View>
       <Pressable
         style={({ pressed }) => [
           styles.keepButton,
@@ -249,7 +260,7 @@ function FeedRow({
           {kept ? "Kept" : "Keep"}
         </Text>
       </Pressable>
-    </View>
+    </Pressable>
   );
 }
 
@@ -309,8 +320,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.cardSurface,
     padding: spacing.md,
   },
+  rowPressed: { opacity: 0.85 },
   rowText: { flex: 1, gap: 3 },
-  rowTitle: { fontFamily: fonts.serifBold, fontSize: 16, color: colors.ink, lineHeight: 21 },
+  rowTitleRow: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  rowTitle: { flex: 1, fontFamily: fonts.serifBold, fontSize: 16, color: colors.ink, lineHeight: 21 },
+  pinMark: { color: colors.gold, fontSize: 12, marginTop: 3 },
   rowSummary: { fontFamily: fonts.sans, fontSize: 12.5, color: colors.inkMuted, lineHeight: 17 },
   rowMeta: {
     fontFamily: fonts.mono,
@@ -328,11 +342,5 @@ const styles = StyleSheet.create({
   keepButtonActive: { backgroundColor: colors.cobalt },
   keepButtonPressed: { opacity: 0.7 },
   keepButtonText: { fontFamily: fonts.sansMedium, fontSize: 12.5, color: colors.cobalt },
-  keepErrorText: {
-    fontFamily: fonts.sans,
-    fontSize: 13,
-    color: colors.danger,
-    marginTop: spacing.sm,
-  },
   keepButtonTextActive: { color: colors.paper },
 });

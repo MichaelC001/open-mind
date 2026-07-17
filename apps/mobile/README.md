@@ -6,8 +6,9 @@ link/text from another app → it lands in Capture, pre-filled) — plus a minim
 library view with search and token login. All enrichment stays server-side; the app
 only talks to your instance's `/api/*` with a Bearer token.
 
-Screens: **Library** (recent items + search), **Capture** (paste a URL / jot a note →
-Save, with an offline queue), **Settings** (instance URL + API token).
+Screens: **Library** (recent items + search), **Desk** (pinned items), **Feed**
+(subscribed feeds), **Capture** (paste a URL / jot a note → Save, with an offline
+queue), **Settings** (instance URL + API token).
 
 ## Prerequisites
 
@@ -33,8 +34,8 @@ cd apps/mobile
 npx expo start        # or: ./node_modules/.bin/expo start
 ```
 
-Scan the QR code with **Expo Go** (iOS/Android). The Library, Capture, and Settings
-screens all work in Expo Go.
+Scan the QR code with **Expo Go** (iOS/Android). The Library, Desk, Feed, Capture,
+and Settings screens all work in Expo Go.
 
 On first launch nothing is configured, so you land on **Settings**:
 
@@ -52,6 +53,15 @@ The Library tab has a search field. An empty query lists recent items
 NL-parse behaviour as the web app) and shows optional “understood” chips when the
 server returns them. Search requires a network connection — there is no local
 full-text index of the library.
+
+Long-press a card for **Pin to desk**, **Open original**, **Copy link**,
+**Share**, or **Delete**. Lists use a TanStack Query cache (≈60s stale window) so
+switching tabs or returning from an item detail does not flash a full reload.
+
+## Desk (pins)
+
+Pinned items live on the **Desk** tab (`GET /api/desk`). Pin or unpin from the
+long-press sheet, the item detail top bar, or the web app — they stay in sync.
 
 ## Offline capture queue
 

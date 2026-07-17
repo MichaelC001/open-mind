@@ -108,13 +108,14 @@ type ItemCardProps = {
   item: Item;
   settings: Settings | null;
   onPress: (item: Item) => void;
-  /** Long-press to delete — omit to disable (e.g. on the feed screen). */
+  /** Long-press for the action sheet — omit to disable. */
   onLongPress?: (item: Item) => void;
 };
 
 export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps) {
   const kind = cardKind(item.cardType);
   const pending = item.status === "pending";
+  const pinned = !!item.pinnedAt;
   const domain = hostOf(item.url);
   const dots = item.palette ?? [];
   const source = imageSource(item.leadImageUrl, settings);
@@ -128,8 +129,14 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
       style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
       onPress={press}
       onLongPress={onLongPress ? () => onLongPress(item) : undefined}
+      delayLongPress={350}
     >
       {children}
+      {pinned ? (
+        <View style={styles.pinBadge} accessibilityLabel="On desk">
+          <Text style={styles.pinBadgeText}>◆</Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 
@@ -223,6 +230,20 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   cardPressed: { opacity: 0.85 },
+  pinBadge: {
+    position: "absolute",
+    top: spacing.sm,
+    right: spacing.sm,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.paper,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pinBadgeText: { fontSize: 11, color: colors.gold, lineHeight: 14 },
   hero: { width: "100%", overflow: "hidden" },
   body: { padding: spacing.md, gap: 4 },
   cardTitle: { fontFamily: fonts.serifBold, fontSize: type.cardTitle.fontSize, color: colors.ink, lineHeight: 22 },

@@ -18,6 +18,8 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Mobile: Desk pins + TanStack Query cache (no feed/tab reload flash) + richer
+  long-press actions (pin/open/copy/share/delete) (2026-07-17)
 - Mobile: delete an item (detail screen + long-press in Library) and group Library by card type (2026-07-16)
 - Mobile offline capture queue + in-app Library search (2026-07-16)
 - Dock v1.1 Desk/Recents home + Launch at login (2026-07-15) — see `docs/superpowers/specs/20260715-dock-desk-autostart-design.md`
