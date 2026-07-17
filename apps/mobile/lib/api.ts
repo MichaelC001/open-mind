@@ -354,6 +354,23 @@ export async function deleteItem(
   }
 }
 
+/** A place the pipeline extracted from an item (see GET /items/{id}/places). */
+export type Place = {
+  id: string;
+  name: string;
+  hint: string;
+  address: string;
+  lat?: number;
+  lng?: number;
+  source: string;
+};
+
+export type PlaceWithItem = Place & {
+  itemId: string;
+  itemTitle: string;
+  itemCardType: string;
+};
+
 /** Subset of OpenAPI UnderstoodQuery — what parse=true returns alongside hits. */
 export type UnderstoodQuery = {
   text?: string;
@@ -404,5 +421,62 @@ export async function searchItems(
     return { ok: res.ok, status: res.status, results, understood };
   } catch {
     return { ok: false, status: 0, results: [] };
+  }
+}
+
+/**
+ * Places extracted from one item via GET {instanceUrl}/api/items/{id}/places.
+ */
+export async function getItemPlaces(
+  id: string,
+  override?: Settings,
+): Promise<{ ok: boolean; status: number; places: Place[] }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0, places: [] };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/items/${id}/places`, {
+      method: "GET",
+      headers: authHeaders(settings.token),
+    });
+    let places: Place[] = [];
+    if (res.ok) {
+      try {
+        const data = (await res.json()) as unknown;
+        if (Array.isArray(data)) places = data as Place[];
+      } catch {
+        places = [];
+      }
+    }
+    return { ok: res.ok, status: res.status, places };
+  } catch {
+    return { ok: false, status: 0, places: [] };
+  }
+}
+
+/**
+ * All of the user's places via GET {instanceUrl}/api/places.
+ */
+export async function listPlaces(
+  override?: Settings,
+): Promise<{ ok: boolean; status: number; places: PlaceWithItem[] }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0, places: [] };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/places`, {
+      method: "GET",
+      headers: authHeaders(settings.token),
+    });
+    let places: PlaceWithItem[] = [];
+    if (res.ok) {
+      try {
+        const data = (await res.json()) as unknown;
+        if (Array.isArray(data)) places = data as PlaceWithItem[];
+      } catch {
+        places = [];
+      }
+    }
+    return { ok: res.ok, status: res.status, places };
+  } catch {
+    return { ok: false, status: 0, places: [] };
   }
 }
