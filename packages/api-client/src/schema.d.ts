@@ -124,6 +124,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/places": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * All of the user's extracted places
+         * @description Every place extracted across the user's items, newest item first, joined with just enough item context to label a map pin. Includes places without coordinates (never geocoded or geocoder miss) — clients list those instead of pinning them.
+         */
+        get: operations["listPlaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{id}/kindle": {
         parameters: {
             query?: never;
@@ -585,6 +605,12 @@ export interface components {
             lng?: number;
             /** @description which signal produced this place (caption) */
             source: string;
+        };
+        PlaceWithItem: components["schemas"]["Place"] & {
+            /** Format: uuid */
+            itemId: string;
+            itemTitle: string;
+            itemCardType: string;
         };
         Highlight: {
             /** Format: uuid */
@@ -1093,6 +1119,26 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    listPlaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description all places; empty when none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaceWithItem"][];
+                };
             };
         };
     };

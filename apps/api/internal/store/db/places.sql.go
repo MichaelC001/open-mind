@@ -95,3 +95,56 @@ func (q *Queries) ListItemPlaces(ctx context.Context, arg ListItemPlacesParams) 
 	}
 	return items, nil
 }
+
+const listPlaces = `-- name: ListPlaces :many
+SELECT p.id, p.name, p.hint, p.address, p.lat, p.lng, p.source,
+       i.id AS item_id, i.title AS item_title, i.card_type AS item_card_type
+FROM item_places p
+JOIN items i ON i.id = p.item_id AND i.user_id = p.user_id
+WHERE p.user_id = $1
+ORDER BY i.created_at DESC, p.name
+`
+
+type ListPlacesRow struct {
+	ID           uuid.UUID
+	Name         string
+	Hint         string
+	Address      string
+	Lat          pgtype.Float8
+	Lng          pgtype.Float8
+	Source       string
+	ItemID       uuid.UUID
+	ItemTitle    string
+	ItemCardType string
+}
+
+func (q *Queries) ListPlaces(ctx context.Context, userID uuid.UUID) ([]ListPlacesRow, error) {
+	rows, err := q.db.Query(ctx, listPlaces, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPlacesRow
+	for rows.Next() {
+		var i ListPlacesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Hint,
+			&i.Address,
+			&i.Lat,
+			&i.Lng,
+			&i.Source,
+			&i.ItemID,
+			&i.ItemTitle,
+			&i.ItemCardType,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

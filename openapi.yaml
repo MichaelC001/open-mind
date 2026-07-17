@@ -158,6 +158,19 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Place" }
         "404": { description: unknown item }
+  /places:
+    get:
+      operationId: listPlaces
+      summary: All of the user's extracted places
+      description: "Every place extracted across the user's items, newest item first, joined with just enough item context to label a map pin. Includes places without coordinates (never geocoded or geocoder miss) — clients list those instead of pinning them."
+      responses:
+        "200":
+          description: all places; empty when none
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PlaceWithItem" }
   /items/{id}/kindle:
     post:
       operationId: sendItemToKindle
@@ -634,6 +647,15 @@ components:
         lat: { type: number, format: double }
         lng: { type: number, format: double }
         source: { type: string, description: "which signal produced this place (caption)" }
+    PlaceWithItem:
+      allOf:
+        - $ref: "#/components/schemas/Place"
+        - type: object
+          required: [itemId, itemTitle, itemCardType]
+          properties:
+            itemId: { type: string, format: uuid }
+            itemTitle: { type: string }
+            itemCardType: { type: string }
     Highlight:
       type: object
       required: [id, sourceItemId, quoteItemId, exact, prefix, suffix, offsetHint, createdAt]
