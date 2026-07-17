@@ -91,6 +91,10 @@ export default async function ReaderPage({ params }: { params: Promise<{ id: str
               letterSpacing: "-.02em",
               color: color.ink,
               margin: "16px 0 0",
+              display: "-webkit-box",
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
             }}
           >
             {item.title}

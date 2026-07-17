@@ -160,6 +160,7 @@ function serifTitle(size: number): CSSProperties {
     letterSpacing: "-.01em",
     color: color.ink,
     margin: 0,
+    ...clamp(3),
   };
 }
 

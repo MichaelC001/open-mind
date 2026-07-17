@@ -113,3 +113,90 @@ func TestExtractOpenGraph(t *testing.T) {
 		t.Error("expected error for 404 response")
 	}
 }
+
+func TestNormalizeSocialVideo(t *testing.T) {
+	const label = "Instagram reel"
+	longCaption := "Hyderabad has a food scene like no other — and these 3 Telugu restaurants are rewriting the rulebook! " +
+		"Thamara — for the ones who love a slow meal. Gamyam — where tradition meets craft."
+
+	tests := []struct {
+		name      string
+		ogTitle   string
+		ogBody    string
+		wantTitle string
+		wantBody  string
+	}{
+		{
+			name:      "instagram author only",
+			ogTitle:   "chef.eats on Instagram",
+			ogBody:    "3 cafes in Lisbon you must try",
+			wantTitle: "chef.eats on Instagram",
+			wantBody:  "3 cafes in Lisbon you must try",
+		},
+		{
+			name:    "instagram title embeds full caption",
+			ogTitle: "Vijay Rathod on Instagram: '" + longCaption + "'",
+			ogBody:  longCaption,
+			wantTitle: truncateRunes(
+				"Vijay Rathod: Hyderabad has a food scene like no other — and these 3 Telugu restaurants are rewriting the rulebook!",
+				socialVideoTitleMax,
+			),
+			wantBody: longCaption,
+		},
+		{
+			name:      "caption only in title fills body",
+			ogTitle:   "Ada on Instagram: \"Best ramen in Shibuya tonight.\"",
+			ogBody:    "",
+			wantTitle: "Ada: Best ramen in Shibuya tonight.",
+			wantBody:  "Best ramen in Shibuya tonight.",
+		},
+		{
+			name:      "empty falls back to label",
+			ogTitle:   "",
+			ogBody:    "",
+			wantTitle: label,
+			wantBody:  "",
+		},
+		{
+			name:      "tiktok caption title is capped",
+			ogTitle:   strings.Repeat("yummy noodles ", 20),
+			ogBody:    "full caption kept",
+			wantTitle: truncateRunes(strings.Repeat("yummy noodles ", 20), socialVideoTitleMax),
+			wantBody:  "full caption kept",
+		},
+		{
+			name:      "multiline caption uses first line as hook",
+			ogTitle:   "Sam on Instagram: 'Line one hook!\nLine two details'",
+			ogBody:    "Line one hook!\nLine two details",
+			wantTitle: "Sam: Line one hook!",
+			wantBody:  "Line one hook!\nLine two details",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotTitle, gotBody := normalizeSocialVideo(tt.ogTitle, tt.ogBody, label)
+			if gotTitle != tt.wantTitle {
+				t.Errorf("title = %q, want %q", gotTitle, tt.wantTitle)
+			}
+			if gotBody != tt.wantBody {
+				t.Errorf("body = %q, want %q", gotBody, tt.wantBody)
+			}
+			if runes := []rune(gotTitle); len(runes) > socialVideoTitleMax {
+				t.Errorf("title rune length = %d, want ≤ %d", len(runes), socialVideoTitleMax)
+			}
+		})
+	}
+}
+
+func TestTruncateRunes(t *testing.T) {
+	if got := truncateRunes("short", 10); got != "short" {
+		t.Errorf("truncateRunes short = %q", got)
+	}
+	got := truncateRunes("one two three four five six", 14)
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected ellipsis, got %q", got)
+	}
+	if len([]rune(got)) > 15 { // 14 + ellipsis rune, or shorter if word-broken
+		t.Errorf("too long: %q (%d runes)", got, len([]rune(got)))
+	}
+}
