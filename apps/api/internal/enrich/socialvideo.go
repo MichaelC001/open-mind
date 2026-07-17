@@ -141,9 +141,7 @@ func (p *Pipeline) runSocialVideo(ctx context.Context, userID uuid.UUID, item db
 		slog.Warn("social video: og extraction failed, degrading to bare card", "item_id", item.ID, "err", err)
 		ex = Extraction{}
 	}
-	if ex.Title == "" {
-		ex.Title = label
-	}
+	ex.Title, ex.Body = normalizeSocialVideo(ex.Title, ex.Body, label)
 
 	if err := q.UpdateItemExtraction(ctx, db.UpdateItemExtractionParams{
 		UserID: userID, ID: item.ID,
@@ -152,4 +150,105 @@ func (p *Pipeline) runSocialVideo(ctx context.Context, userID uuid.UUID, item db
 		return fmt.Errorf("saving social video extraction: %w", err)
 	}
 	return p.enrichText(ctx, userID, item.ID, ex.Title, ex.Body)
+}
+
+// socialVideoTitleMax is the display cap for reel/TikTok card titles. Matches
+// the spirit of noteTitle (80) with a little room for an "Author: …" prefix.
+const socialVideoTitleMax = 100
+
+// normalizeSocialVideo turns noisy OpenGraph metadata into a short card title
+// and a caption body. Instagram often stuffs the full caption into og:title as
+// `Name on Instagram: 'caption…'` while og:description may or may not repeat
+// it — without this, the detail screen renders a multi-paragraph serif "title".
+func normalizeSocialVideo(ogTitle, ogBody, label string) (title, body string) {
+	body = strings.TrimSpace(ogBody)
+	raw := strings.TrimSpace(ogTitle)
+
+	author, caption := splitSocialVideoTitle(raw)
+	if body == "" {
+		body = caption
+	}
+	title = socialVideoTitle(author, caption, label)
+	return title, body
+}
+
+// splitSocialVideoTitle peels `Author on Instagram: 'caption'` (and the
+// TikTok analogue) into author + caption. When the pattern doesn't match,
+// author is empty and caption is the whole string (still useful as a body
+// fallback).
+func splitSocialVideoTitle(title string) (author, caption string) {
+	for _, marker := range []string{" on Instagram:", " on TikTok:"} {
+		if i := strings.Index(title, marker); i >= 0 {
+			author = strings.TrimSpace(title[:i])
+			caption = strings.TrimSpace(title[i+len(marker):])
+			caption = strings.Trim(caption, `'"`)
+			return author, caption
+		}
+	}
+	for _, suffix := range []string{" on Instagram", " on TikTok"} {
+		if strings.HasSuffix(title, suffix) {
+			return strings.TrimSpace(strings.TrimSuffix(title, suffix)), ""
+		}
+	}
+	return "", title
+}
+
+// socialVideoTitle builds a short display title: prefer "Author: hook" from a
+// peeled caption, else a capped first line of the raw OG title, else the
+// platform label. Platform fallbacks use `label` (from the URL host), never a
+// substring search on the OG title — handles like "TikTokFan on Instagram"
+// must not flip to TikTok.
+func socialVideoTitle(author, caption, label string) string {
+	hook := firstTitleHook(caption)
+	if author != "" && hook != "" {
+		return truncateRunes(author+": "+hook, socialVideoTitleMax)
+	}
+	if author != "" {
+		platform := "Instagram"
+		if strings.HasPrefix(label, "TikTok") {
+			platform = "TikTok"
+		}
+		return truncateRunes(author+" on "+platform, socialVideoTitleMax)
+	}
+	if hook = firstTitleHook(caption); hook != "" {
+		return truncateRunes(hook, socialVideoTitleMax)
+	}
+	return label
+}
+
+// firstTitleHook takes the first sentence or line of s, suitable as a card
+// title fragment. Empty input yields "".
+func firstTitleHook(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	runes := []rune(s)
+	for i := 0; i < len(runes)-1; i++ {
+		c := runes[i]
+		if (c == '.' || c == '!' || c == '?') && runes[i+1] == ' ' {
+			return string(runes[:i+1])
+		}
+	}
+	return s
+}
+
+// truncateRunes caps s at n runes, appending an ellipsis when truncated.
+// Prefers a word boundary in the final third so we don't cut mid-word when
+// a nearby space exists.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if n <= 0 || len(r) <= n {
+		return s
+	}
+	cut := r[:n]
+	for i := len(cut) - 1; i >= (n*2)/3; i-- {
+		if cut[i] == ' ' || cut[i] == '\t' {
+			return string(cut[:i]) + "…"
+		}
+	}
+	return string(cut) + "…"
 }

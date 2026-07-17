@@ -341,7 +341,9 @@ function Body({
       ) : null}
       {kicker ? <Text style={styles.kicker}>{kicker}</Text> : null}
       <PaletteDots dots={dots} />
-      <Text style={styles.title}>{title || host || "Untitled"}</Text>
+      <Text style={styles.title} numberOfLines={3}>
+        {title || host || "Untitled"}
+      </Text>
       {summary ? <Text style={styles.summary}>{summary}</Text> : null}
       {item.url ? <OpenOriginalPill url={item.url} /> : null}
       {item.url ? (

@@ -100,6 +100,10 @@ function Title({ children }: { children: ReactNode }) {
         letterSpacing: "-.02em",
         color: color.ink,
         margin: "14px 0 0",
+        display: "-webkit-box",
+        WebkitLineClamp: 3,
+        WebkitBoxOrient: "vertical",
+        overflow: "hidden",
       }}
     >
       {children}

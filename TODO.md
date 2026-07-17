@@ -20,6 +20,9 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Reel/social-video titles: peel Instagram/TikTok OG caption dumps into a
+  short "Author: hook" title (caption stays in body); clamp detail/card
+  titles to 3 lines on web + mobile for already-saved items (2026-07-17)
 - Extract: fall back to first in-article `<img>` when `og:image` is
   missing (simonwillison.net-style posts) (2026-07-17)
 - Reel places Phase 2: thumbnail vision (`ExtractPlacesVision` on Gemini,
