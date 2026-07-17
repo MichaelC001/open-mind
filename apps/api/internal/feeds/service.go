@@ -87,7 +87,7 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, feedURL string) (db
 		}
 	}
 
-	parsed, etag, lastModified, err := s.fetchAndParse(ctx, feedURL, "", "")
+	parsed, etag, lastModified, cacheMaxAge, err := s.fetchAndParse(ctx, feedURL, "", "")
 	if err != nil {
 		return db.Feed{}, 0, fmt.Errorf("fetching feed: %w", err)
 	}
@@ -125,7 +125,7 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, feedURL string) (db
 	}
 
 	polled := nowTS()
-	s.recordStatus(ctx, feed, "ok", etag, lastModified)
+	s.recordStatus(ctx, feed, "ok", etag, lastModified, nextPollInterval(pollFloor, added > 0, cacheMaxAge))
 	feed.LastPolledAt, feed.LastStatus = polled, "ok"
 	feed.Etag, feed.LastModified = etag, lastModified
 	return feed, added, nil
@@ -136,34 +136,37 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, feedURL string) (db
 // ("error: …") and returns (0, nil) so a single broken feed can't break the
 // poll loop.
 func (s *Service) Refresh(ctx context.Context, feed db.Feed) (int, error) {
-	parsed, etag, lastModified, err := s.fetchAndParse(ctx, feed.Url, feed.Etag, feed.LastModified)
+	current := time.Duration(feed.PollIntervalMinutes) * time.Minute
+	parsed, etag, lastModified, cacheMaxAge, err := s.fetchAndParse(ctx, feed.Url, feed.Etag, feed.LastModified)
 	if errors.Is(err, errNotModified) {
 		// Healthy no-op: the server confirmed nothing changed, so skip parsing
 		// and item creation entirely, keeping the stored validators.
-		s.recordStatus(ctx, feed, "ok", feed.Etag, feed.LastModified)
+		s.recordStatus(ctx, feed, "ok", feed.Etag, feed.LastModified, nextPollInterval(current, false, cacheMaxAge))
 		return 0, nil
 	}
 	if err != nil {
-		s.recordStatus(ctx, feed, "error: "+shortErr(err), feed.Etag, feed.LastModified)
+		// Back off gently on a fetch/parse error — no cache hint is available,
+		// and we deliberately don't reset to the floor, so a flaky feed doesn't
+		// get hammered.
+		s.recordStatus(ctx, feed, "error: "+shortErr(err), feed.Etag, feed.LastModified, nextPollInterval(current, false, 0))
 		slog.Warn("feed refresh failed", "feed_id", feed.ID, "url", feed.Url, "err", err)
 		return 0, nil
 	}
 	added, _, err := s.saveEntries(ctx, feed.UserID, &feed.ID, parsed.Entries)
 	if err != nil {
-		s.recordStatus(ctx, feed, "error: "+shortErr(err), feed.Etag, feed.LastModified)
+		s.recordStatus(ctx, feed, "error: "+shortErr(err), feed.Etag, feed.LastModified, nextPollInterval(current, false, 0))
 		slog.Warn("feed refresh failed", "feed_id", feed.ID, "url", feed.Url, "err", err)
 		return 0, nil
 	}
-	s.recordStatus(ctx, feed, "ok", etag, lastModified)
+	s.recordStatus(ctx, feed, "ok", etag, lastModified, nextPollInterval(current, added > 0, cacheMaxAge))
 	return added, nil
 }
 
-// RefreshDue refreshes every feed whose last poll is null or older than
-// olderThan. It is the periodic poller's entry point and continues past an
-// individual feed's error.
-func (s *Service) RefreshDue(ctx context.Context, olderThan time.Duration) error {
-	cutoff := pgtype.Timestamptz{Time: time.Now().Add(-olderThan), Valid: true}
-	due, err := s.Store.Queries.ListFeedsDue(ctx, cutoff)
+// RefreshDue refreshes every feed whose adaptive schedule has come due
+// (next_poll_at <= now). It is the periodic poller's entry point and
+// continues past an individual feed's error.
+func (s *Service) RefreshDue(ctx context.Context) error {
+	due, err := s.Store.Queries.ListFeedsDueForPoll(ctx)
 	if err != nil {
 		return fmt.Errorf("listing due feeds: %w", err)
 	}
@@ -233,16 +236,18 @@ func (s *Service) saveEntries(ctx context.Context, userID uuid.UUID, feedID *uui
 
 // fetchAndParse fetches feedURL with the SSRF-safe client and parses the body.
 // When etag/lastModified are non-empty they are sent as If-None-Match /
-// If-Modified-Since; a 304 returns errNotModified without reading the body.
-// On success it also returns the response's validators (empty when absent).
-func (s *Service) fetchAndParse(ctx context.Context, feedURL, etag, lastModified string) (Feed, string, string, error) {
+// If-Modified-Since; a 304 returns errNotModified without reading the body. On
+// success it also returns the response's validators (empty when absent) and
+// cacheMaxAge, the origin's remaining Cache-Control freshness lifetime (zero
+// when absent), which is a hard lower bound on the next poll interval.
+func (s *Service) fetchAndParse(ctx context.Context, feedURL, etag, lastModified string) (Feed, string, string, time.Duration, error) {
 	client := s.HTTPClient
 	if client == nil {
 		client = enrich.SafeHTTPClient(fetchTimeout)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
 	if err != nil {
-		return Feed{}, "", "", fmt.Errorf("building request: %w", err)
+		return Feed{}, "", "", 0, fmt.Errorf("building request: %w", err)
 	}
 	req.Header.Set("Accept", "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8")
 	req.Header.Set("User-Agent", "openmind-feeds/1.0")
@@ -255,34 +260,38 @@ func (s *Service) fetchAndParse(ctx context.Context, feedURL, etag, lastModified
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return Feed{}, "", "", fmt.Errorf("requesting feed: %w", err)
+		return Feed{}, "", "", 0, fmt.Errorf("requesting feed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotModified {
-		return Feed{}, "", "", errNotModified
+		return Feed{}, "", "", parseCacheControlMaxAge(resp.Header.Get("Cache-Control"), resp.Header.Get("Age")), errNotModified
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Feed{}, "", "", fmt.Errorf("feed returned status %d", resp.StatusCode)
+		return Feed{}, "", "", 0, fmt.Errorf("feed returned status %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedBytes))
 	if err != nil {
-		return Feed{}, "", "", fmt.Errorf("reading feed body: %w", err)
+		return Feed{}, "", "", 0, fmt.Errorf("reading feed body: %w", err)
 	}
 	parsed, err := Parse(data, feedURL)
 	if err != nil {
-		return Feed{}, "", "", fmt.Errorf("parsing feed: %w", err)
+		return Feed{}, "", "", 0, fmt.Errorf("parsing feed: %w", err)
 	}
-	return parsed, resp.Header.Get("ETag"), resp.Header.Get("Last-Modified"), nil
+	return parsed, resp.Header.Get("ETag"), resp.Header.Get("Last-Modified"),
+		parseCacheControlMaxAge(resp.Header.Get("Cache-Control"), resp.Header.Get("Age")), nil
 }
 
-// recordStatus stamps last_polled_at (now), last_status, and the conditional-GET
-// validators on a feed. A write failure is logged, not returned — the poll loop
-// must keep going.
-func (s *Service) recordStatus(ctx context.Context, feed db.Feed, status, etag, lastModified string) {
+// recordStatus stamps last_polled_at (now), last_status, the conditional-GET
+// validators, and the adaptive schedule (next_poll_at, poll_interval_minutes,
+// derived from nextInterval) on a feed. A write failure is logged, not
+// returned — the poll loop must keep going.
+func (s *Service) recordStatus(ctx context.Context, feed db.Feed, status, etag, lastModified string, nextInterval time.Duration) {
 	if err := s.Store.Queries.SetFeedPolled(ctx, db.SetFeedPolledParams{
 		UserID: feed.UserID, ID: feed.ID, LastPolledAt: nowTS(), LastStatus: status,
 		Etag: etag, LastModified: lastModified,
+		NextPollAt:          pgtype.Timestamptz{Time: time.Now().Add(nextInterval), Valid: true},
+		PollIntervalMinutes: int32(nextInterval / time.Minute),
 	}); err != nil {
 		slog.Error("recording feed poll status", "feed_id", feed.ID, "err", err)
 	}

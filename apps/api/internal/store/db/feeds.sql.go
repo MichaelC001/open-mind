@@ -151,46 +151,6 @@ func (q *Queries) ListFeeds(ctx context.Context, userID uuid.UUID) ([]Feed, erro
 	return items, nil
 }
 
-const listFeedsDue = `-- name: ListFeedsDue :many
-SELECT id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified, next_poll_at, poll_interval_minutes FROM feeds WHERE last_polled_at IS NULL OR last_polled_at < $1 ORDER BY last_polled_at ASC NULLS FIRST
-`
-
-// Cross-user by design: the periodic poller runs system-wide, refreshing every
-// feed whose last poll is null or older than the cutoff. Items it saves are
-// still scoped to each feed's own user_id.
-func (q *Queries) ListFeedsDue(ctx context.Context, lastPolledAt pgtype.Timestamptz) ([]Feed, error) {
-	rows, err := q.db.Query(ctx, listFeedsDue, lastPolledAt)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Feed
-	for rows.Next() {
-		var i Feed
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.Url,
-			&i.Title,
-			&i.SiteUrl,
-			&i.LastPolledAt,
-			&i.LastStatus,
-			&i.CreatedAt,
-			&i.Etag,
-			&i.LastModified,
-			&i.NextPollAt,
-			&i.PollIntervalMinutes,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listFeedsDueForPoll = `-- name: ListFeedsDueForPoll :many
 SELECT id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified, next_poll_at, poll_interval_minutes FROM feeds WHERE next_poll_at <= now() ORDER BY next_poll_at ASC
 `

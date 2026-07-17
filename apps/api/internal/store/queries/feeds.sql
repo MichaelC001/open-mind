@@ -21,12 +21,6 @@ WHERE user_id = $1 AND id = $2;
 UPDATE items SET kept_at = now(), updated_at = now()
 WHERE user_id = $1 AND feed_id = $2 AND kept_at IS NULL;
 
--- name: ListFeedsDue :many
--- Cross-user by design: the periodic poller runs system-wide, refreshing every
--- feed whose last poll is null or older than the cutoff. Items it saves are
--- still scoped to each feed's own user_id.
-SELECT * FROM feeds WHERE last_polled_at IS NULL OR last_polled_at < $1 ORDER BY last_polled_at ASC NULLS FIRST;
-
 -- name: ListFeedsDueForPoll :many
 -- Cross-user by design (system-wide poller). Only feeds whose adaptive
 -- schedule has come due; items saved remain scoped to each feed's user_id.
