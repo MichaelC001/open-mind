@@ -41,16 +41,18 @@ type DeviceLink struct {
 }
 
 type Feed struct {
-	ID           uuid.UUID
-	UserID       uuid.UUID
-	Url          string
-	Title        string
-	SiteUrl      string
-	LastPolledAt pgtype.Timestamptz
-	LastStatus   string
-	CreatedAt    pgtype.Timestamptz
-	Etag         string
-	LastModified string
+	ID                  uuid.UUID
+	UserID              uuid.UUID
+	Url                 string
+	Title               string
+	SiteUrl             string
+	LastPolledAt        pgtype.Timestamptz
+	LastStatus          string
+	CreatedAt           pgtype.Timestamptz
+	Etag                string
+	LastModified        string
+	NextPollAt          pgtype.Timestamptz
+	PollIntervalMinutes int32
 }
 
 type Highlight struct {
