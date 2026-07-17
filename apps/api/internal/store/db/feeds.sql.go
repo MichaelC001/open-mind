@@ -13,7 +13,7 @@ import (
 )
 
 const createFeed = `-- name: CreateFeed :one
-INSERT INTO feeds (user_id, url, title, site_url) VALUES ($1, $2, $3, $4) RETURNING id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified
+INSERT INTO feeds (user_id, url, title, site_url) VALUES ($1, $2, $3, $4) RETURNING id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified, next_poll_at, poll_interval_minutes
 `
 
 type CreateFeedParams struct {
@@ -42,6 +42,8 @@ func (q *Queries) CreateFeed(ctx context.Context, arg CreateFeedParams) (Feed, e
 		&i.CreatedAt,
 		&i.Etag,
 		&i.LastModified,
+		&i.NextPollAt,
+		&i.PollIntervalMinutes,
 	)
 	return i, err
 }
@@ -64,7 +66,7 @@ func (q *Queries) DeleteFeed(ctx context.Context, arg DeleteFeedParams) (int64, 
 }
 
 const getFeed = `-- name: GetFeed :one
-SELECT id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified FROM feeds WHERE user_id = $1 AND id = $2
+SELECT id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified, next_poll_at, poll_interval_minutes FROM feeds WHERE user_id = $1 AND id = $2
 `
 
 type GetFeedParams struct {
@@ -86,6 +88,8 @@ func (q *Queries) GetFeed(ctx context.Context, arg GetFeedParams) (Feed, error) 
 		&i.CreatedAt,
 		&i.Etag,
 		&i.LastModified,
+		&i.NextPollAt,
+		&i.PollIntervalMinutes,
 	)
 	return i, err
 }
@@ -111,7 +115,7 @@ func (q *Queries) KeepFeedItems(ctx context.Context, arg KeepFeedItemsParams) (i
 }
 
 const listFeeds = `-- name: ListFeeds :many
-SELECT id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified FROM feeds WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified, next_poll_at, poll_interval_minutes FROM feeds WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListFeeds(ctx context.Context, userID uuid.UUID) ([]Feed, error) {
@@ -134,6 +138,8 @@ func (q *Queries) ListFeeds(ctx context.Context, userID uuid.UUID) ([]Feed, erro
 			&i.CreatedAt,
 			&i.Etag,
 			&i.LastModified,
+			&i.NextPollAt,
+			&i.PollIntervalMinutes,
 		); err != nil {
 			return nil, err
 		}
@@ -145,15 +151,14 @@ func (q *Queries) ListFeeds(ctx context.Context, userID uuid.UUID) ([]Feed, erro
 	return items, nil
 }
 
-const listFeedsDue = `-- name: ListFeedsDue :many
-SELECT id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified FROM feeds WHERE last_polled_at IS NULL OR last_polled_at < $1 ORDER BY last_polled_at ASC NULLS FIRST
+const listFeedsDueForPoll = `-- name: ListFeedsDueForPoll :many
+SELECT id, user_id, url, title, site_url, last_polled_at, last_status, created_at, etag, last_modified, next_poll_at, poll_interval_minutes FROM feeds WHERE next_poll_at <= now() ORDER BY next_poll_at ASC
 `
 
-// Cross-user by design: the periodic poller runs system-wide, refreshing every
-// feed whose last poll is null or older than the cutoff. Items it saves are
-// still scoped to each feed's own user_id.
-func (q *Queries) ListFeedsDue(ctx context.Context, lastPolledAt pgtype.Timestamptz) ([]Feed, error) {
-	rows, err := q.db.Query(ctx, listFeedsDue, lastPolledAt)
+// Cross-user by design (system-wide poller). Only feeds whose adaptive
+// schedule has come due; items saved remain scoped to each feed's user_id.
+func (q *Queries) ListFeedsDueForPoll(ctx context.Context) ([]Feed, error) {
+	rows, err := q.db.Query(ctx, listFeedsDueForPoll)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +177,8 @@ func (q *Queries) ListFeedsDue(ctx context.Context, lastPolledAt pgtype.Timestam
 			&i.CreatedAt,
 			&i.Etag,
 			&i.LastModified,
+			&i.NextPollAt,
+			&i.PollIntervalMinutes,
 		); err != nil {
 			return nil, err
 		}
@@ -184,17 +191,20 @@ func (q *Queries) ListFeedsDue(ctx context.Context, lastPolledAt pgtype.Timestam
 }
 
 const setFeedPolled = `-- name: SetFeedPolled :exec
-UPDATE feeds SET last_polled_at = $3, last_status = $4, etag = $5, last_modified = $6
+UPDATE feeds SET last_polled_at = $3, last_status = $4, etag = $5, last_modified = $6,
+  next_poll_at = $7, poll_interval_minutes = $8
 WHERE user_id = $1 AND id = $2
 `
 
 type SetFeedPolledParams struct {
-	UserID       uuid.UUID
-	ID           uuid.UUID
-	LastPolledAt pgtype.Timestamptz
-	LastStatus   string
-	Etag         string
-	LastModified string
+	UserID              uuid.UUID
+	ID                  uuid.UUID
+	LastPolledAt        pgtype.Timestamptz
+	LastStatus          string
+	Etag                string
+	LastModified        string
+	NextPollAt          pgtype.Timestamptz
+	PollIntervalMinutes int32
 }
 
 func (q *Queries) SetFeedPolled(ctx context.Context, arg SetFeedPolledParams) error {
@@ -205,6 +215,8 @@ func (q *Queries) SetFeedPolled(ctx context.Context, arg SetFeedPolledParams) er
 		arg.LastStatus,
 		arg.Etag,
 		arg.LastModified,
+		arg.NextPollAt,
+		arg.PollIntervalMinutes,
 	)
 	return err
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -347,9 +348,11 @@ func TestFeedRefreshChangedContentUpdatesValidators(t *testing.T) {
 		t.Fatalf("add: %v", err)
 	}
 	// Force a stale stored validator, then refresh: 200 path must overwrite it.
+	// The schedule columns are preserved as-is; this test isn't exercising them.
 	if err := s.Store.Queries.SetFeedPolled(ctx, db.SetFeedPolledParams{
 		UserID: uid, ID: feed.ID, LastPolledAt: feed.LastPolledAt, LastStatus: "ok",
 		Etag: `"stale"`, LastModified: "",
+		NextPollAt: feed.NextPollAt, PollIntervalMinutes: feed.PollIntervalMinutes,
 	}); err != nil {
 		t.Fatalf("stale validators: %v", err)
 	}
@@ -419,4 +422,207 @@ func TestFeedFetchErrorPreservesValidators(t *testing.T) {
 	if refetched.Etag != `"keep"` {
 		t.Errorf("etag = %q, want preserved through error", refetched.Etag)
 	}
+}
+
+// assertNextPollAt checks that a feed's next_poll_at is within a few seconds
+// of baseline+want, tolerating the small gap between computing the baseline
+// and the service's own time.Now() call inside recordStatus.
+func assertNextPollAt(t *testing.T, got pgtype.Timestamptz, baseline time.Time, want time.Duration) {
+	t.Helper()
+	if !got.Valid {
+		t.Fatal("next_poll_at not set")
+	}
+	wantAt := baseline.Add(want)
+	if diff := got.Time.Sub(wantAt); diff < -5*time.Second || diff > 5*time.Second {
+		t.Errorf("next_poll_at = %v, want ~%v (diff %v)", got.Time, wantAt, diff)
+	}
+}
+
+func TestFeedAddSetsInitialSchedule(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	uid := newUser(t, s)
+
+	var entries atomic.Pointer[[]string]
+	entries.Store(&[]string{"https://example.com/a"})
+	srv := rssServer(t, &entries)
+	s.HTTPClient = srv.Client()
+
+	before := time.Now()
+	feed, added, err := s.Add(ctx, uid, srv.URL)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if added != 1 {
+		t.Fatalf("added = %d, want 1", added)
+	}
+
+	got, err := s.Store.Queries.GetFeed(ctx, db.GetFeedParams{UserID: uid, ID: feed.ID})
+	if err != nil {
+		t.Fatalf("get feed: %v", err)
+	}
+	if got.PollIntervalMinutes != 30 {
+		t.Errorf("poll_interval_minutes = %d, want 30", got.PollIntervalMinutes)
+	}
+	assertNextPollAt(t, got.NextPollAt, before, 30*time.Minute)
+}
+
+func TestFeedAddZeroBackfillStartsAtFloor(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	uid := newUser(t, s)
+
+	// Feed publishes no entries at all: backfill adds nothing.
+	var entries atomic.Pointer[[]string]
+	entries.Store(&[]string{})
+	srv := rssServer(t, &entries)
+	s.HTTPClient = srv.Client()
+
+	before := time.Now()
+	feed, added, err := s.Add(ctx, uid, srv.URL)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if added != 0 {
+		t.Fatalf("added = %d, want 0", added)
+	}
+
+	got, err := s.Store.Queries.GetFeed(ctx, db.GetFeedParams{UserID: uid, ID: feed.ID})
+	if err != nil {
+		t.Fatalf("get feed: %v", err)
+	}
+	// Subscribing is a user signal of interest, so even a zero-entry backfill
+	// must start at the 30-minute floor, not double to 60 (added==0 is only
+	// meaningful for Refresh's steady-state backoff).
+	if got.PollIntervalMinutes != 30 {
+		t.Errorf("poll_interval_minutes = %d, want 30 (subscribe always resets to the floor)", got.PollIntervalMinutes)
+	}
+	assertNextPollAt(t, got.NextPollAt, before, 30*time.Minute)
+}
+
+func TestFeedRefreshDoublesIntervalWhenUnchanged(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	uid := newUser(t, s)
+
+	var entries atomic.Pointer[[]string]
+	entries.Store(&[]string{"https://example.com/a"})
+	srv := rssServer(t, &entries)
+	s.HTTPClient = srv.Client()
+
+	feed, _, err := s.Add(ctx, uid, srv.URL)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	before := time.Now()
+	if added, err := s.Refresh(ctx, feed); err != nil || added != 0 {
+		t.Fatalf("refresh: added=%d err=%v, want 0/nil", added, err)
+	}
+
+	got, err := s.Store.Queries.GetFeed(ctx, db.GetFeedParams{UserID: uid, ID: feed.ID})
+	if err != nil {
+		t.Fatalf("get feed: %v", err)
+	}
+	if got.PollIntervalMinutes != 60 {
+		t.Errorf("poll_interval_minutes = %d, want 60 (doubled from 30)", got.PollIntervalMinutes)
+	}
+	assertNextPollAt(t, got.NextPollAt, before, 60*time.Minute)
+}
+
+func TestFeedRefreshResetsIntervalOnNewItems(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	uid := newUser(t, s)
+
+	var entries atomic.Pointer[[]string]
+	entries.Store(&[]string{"https://example.com/a"})
+	srv := rssServer(t, &entries)
+	s.HTTPClient = srv.Client()
+
+	feed, _, err := s.Add(ctx, uid, srv.URL)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	// Unchanged refresh doubles the interval to 60m first.
+	if _, err := s.Refresh(ctx, feed); err != nil {
+		t.Fatalf("refresh (unchanged): %v", err)
+	}
+	doubled, err := s.Store.Queries.GetFeed(ctx, db.GetFeedParams{UserID: uid, ID: feed.ID})
+	if err != nil {
+		t.Fatalf("get feed: %v", err)
+	}
+	if doubled.PollIntervalMinutes != 60 {
+		t.Fatalf("poll_interval_minutes = %d, want 60 before the reset case", doubled.PollIntervalMinutes)
+	}
+
+	// A new entry must reset the interval back to the floor.
+	entries.Store(&[]string{"https://example.com/a", "https://example.com/b"})
+	before := time.Now()
+	if added, err := s.Refresh(ctx, doubled); err != nil || added != 1 {
+		t.Fatalf("refresh (changed): added=%d err=%v, want 1/nil", added, err)
+	}
+
+	got, err := s.Store.Queries.GetFeed(ctx, db.GetFeedParams{UserID: uid, ID: feed.ID})
+	if err != nil {
+		t.Fatalf("get feed: %v", err)
+	}
+	if got.PollIntervalMinutes != 30 {
+		t.Errorf("poll_interval_minutes = %d, want 30 (reset on new items)", got.PollIntervalMinutes)
+	}
+	assertNextPollAt(t, got.NextPollAt, before, 30*time.Minute)
+}
+
+// cacheControlServer serves a plain RSS document that always returns 200 with
+// the given Cache-Control header, so the test can assert the header floors
+// the adaptive interval even when the poll itself is otherwise unchanged.
+func cacheControlServer(t *testing.T, cacheControl string, entries *atomic.Pointer[[]string]) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		w.Header().Set("Cache-Control", cacheControl)
+		var b strings.Builder
+		b.WriteString(`<?xml version="1.0"?><rss version="2.0"><channel>`)
+		b.WriteString(`<title>Cache Feed</title><link>https://example.com</link>`)
+		for i, u := range *entries.Load() {
+			fmt.Fprintf(&b, `<item><title>Entry %d</title><link>%s</link></item>`, i, u)
+		}
+		b.WriteString(`</channel></rss>`)
+		_, _ = w.Write([]byte(b.String()))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestFeedRefreshCacheControlFloorsInterval(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	uid := newUser(t, s)
+
+	var entries atomic.Pointer[[]string]
+	entries.Store(&[]string{"https://example.com/a"})
+	srv := cacheControlServer(t, "max-age=7200", &entries)
+	s.HTTPClient = srv.Client()
+
+	feed, _, err := s.Add(ctx, uid, srv.URL)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	// Unchanged poll would normally double 30m -> 60m, but the origin's
+	// 7200s (120m) max-age is a hard floor that beats the doubling.
+	before := time.Now()
+	if added, err := s.Refresh(ctx, feed); err != nil || added != 0 {
+		t.Fatalf("refresh: added=%d err=%v, want 0/nil", added, err)
+	}
+
+	got, err := s.Store.Queries.GetFeed(ctx, db.GetFeedParams{UserID: uid, ID: feed.ID})
+	if err != nil {
+		t.Fatalf("get feed: %v", err)
+	}
+	if got.PollIntervalMinutes < 120 {
+		t.Errorf("poll_interval_minutes = %d, want >= 120 (cache floor beats doubling)", got.PollIntervalMinutes)
+	}
+	assertNextPollAt(t, got.NextPollAt, before, 120*time.Minute)
 }

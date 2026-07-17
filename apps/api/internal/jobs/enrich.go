@@ -64,6 +64,12 @@ func (w *EnrichWorker) Work(ctx context.Context, job *river.Job[EnrichArgs]) err
 // meaningful.
 const digestScanInterval = time.Hour
 
+// pollInterval is how often the periodic poll_feeds job is enqueued. Each run
+// only refreshes feeds whose own adaptive schedule (next_poll_at) has come
+// due, so this just needs to be at least as frequent as the shortest possible
+// per-feed interval (pollFloor, 30m) for a feed to be picked up promptly.
+const pollInterval = 30 * time.Minute
+
 // NewRiverClient builds a River client over the given pool. When workersOn is
 // true it registers the enrichment, feed-poll, send-kindle, and scan-digests
 // workers, a default queue, and the periodic feed-poll and scan-digests jobs;
