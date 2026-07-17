@@ -119,14 +119,19 @@ export default function LibraryScreen() {
       <View style={styles.header}>
         <View style={styles.titleRow}>
           <Text style={styles.title}>The Mind</Text>
-          {!searching ? (
-            <Pressable
-              style={({ pressed }) => [styles.groupToggle, pressed && styles.groupTogglePressed]}
-              onPress={() => setGrouped((g) => !g)}
-            >
-              <Text style={styles.groupToggleText}>{grouped ? "List" : "Group by type"}</Text>
+          <View style={styles.headerActions}>
+            <Pressable onPress={() => router.push("/places")} hitSlop={8}>
+              <Text style={styles.mapAction}>⌖ Map</Text>
             </Pressable>
-          ) : null}
+            {!searching ? (
+              <Pressable
+                style={({ pressed }) => [styles.groupToggle, pressed && styles.groupTogglePressed]}
+                onPress={() => setGrouped((g) => !g)}
+              >
+                <Text style={styles.groupToggleText}>{grouped ? "List" : "Group by type"}</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
         <Text style={styles.subtitle}>
           {searching
@@ -320,6 +325,8 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.md },
   titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   title: { fontFamily: fonts.serifBold, fontSize: 27, color: colors.ink },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  mapAction: { fontFamily: fonts.sansSemiBold, fontSize: 15, color: colors.cobalt },
   groupToggle: {
     borderWidth: 1,
     borderColor: colors.hairline,

@@ -31,4 +31,6 @@ export const queryKeys = {
   feed: (limit: number) => ["feed", limit] as const,
   desk: () => ["desk"] as const,
   item: (id: string) => ["item", id] as const,
+  itemPlaces: (id: string) => ["item", id, "places"] as const,
+  places: ["places"] as const,
 };

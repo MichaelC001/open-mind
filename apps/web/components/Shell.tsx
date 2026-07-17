@@ -24,15 +24,17 @@ export async function Shell({
   activeDesk,
   activeDrift,
   activeFeed,
+  activePlaces,
 }: {
   children: ReactNode;
   activeLensId?: string;
   activeDesk?: boolean;
   activeDrift?: boolean;
   activeFeed?: boolean;
+  activePlaces?: boolean;
 }) {
   const lenses = await getLenses();
-  const mindActive = !activeLensId && !activeDesk && !activeDrift && !activeFeed;
+  const mindActive = !activeLensId && !activeDesk && !activeDrift && !activeFeed && !activePlaces;
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
       <aside
@@ -148,6 +150,19 @@ export async function Shell({
           }}
         >
           <span style={{ fontSize: 15, width: 16 }}>❍</span> Drift
+        </Link>
+
+        {/* Places — every spot your saves mention, pinned on a map. */}
+        <Link
+          href="/places"
+          style={{
+            ...navBase,
+            textDecoration: "none",
+            background: activePlaces ? "rgba(27,63,209,.1)" : "transparent",
+            color: activePlaces ? tokens.color.cobalt : tokens.color.ink,
+          }}
+        >
+          <span style={{ fontSize: 15, width: 16 }}>⌖</span> Places
         </Link>
 
         <div style={{ ...softDivider, margin: "16px 8px" }} />

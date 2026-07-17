@@ -351,6 +351,25 @@ type Place struct {
 	Source string `json:"source"`
 }
 
+// PlaceWithItem defines model for PlaceWithItem.
+type PlaceWithItem struct {
+	// Address geocoder display address; empty when not geocoded
+	Address string `json:"address"`
+
+	// Hint disambiguating locality from the source text, e.g. a city
+	Hint         string             `json:"hint"`
+	Id           openapi_types.UUID `json:"id"`
+	ItemCardType string             `json:"itemCardType"`
+	ItemId       openapi_types.UUID `json:"itemId"`
+	ItemTitle    string             `json:"itemTitle"`
+	Lat          *float64           `json:"lat,omitempty"`
+	Lng          *float64           `json:"lng,omitempty"`
+	Name         string             `json:"name"`
+
+	// Source which signal produced this place (caption)
+	Source string `json:"source"`
+}
+
 // RelatedItem defines model for RelatedItem.
 type RelatedItem struct {
 	Distance float64 `json:"distance"`
@@ -599,6 +618,9 @@ type ServerInterface interface {
 	// Send this Lens's current matches to Kindle as a digest EPUB
 	// (POST /lenses/{id}/kindle)
 	SendLensToKindle(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// All of the user's extracted places
+	// (GET /places)
+	ListPlaces(w http.ResponseWriter, r *http.Request)
 
 	// (GET /search)
 	SearchItems(w http.ResponseWriter, r *http.Request, params SearchItemsParams)
@@ -807,6 +829,12 @@ func (_ Unimplemented) GetLensItems(w http.ResponseWriter, r *http.Request, id o
 // Send this Lens's current matches to Kindle as a digest EPUB
 // (POST /lenses/{id}/kindle)
 func (_ Unimplemented) SendLensToKindle(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// All of the user's extracted places
+// (GET /places)
+func (_ Unimplemented) ListPlaces(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1856,6 +1884,26 @@ func (siw *ServerInterfaceWrapper) SendLensToKindle(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// ListPlaces operation middleware
+func (siw *ServerInterfaceWrapper) ListPlaces(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListPlaces(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SearchItems operation middleware
 func (siw *ServerInterfaceWrapper) SearchItems(w http.ResponseWriter, r *http.Request) {
 
@@ -2171,6 +2219,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/lenses/{id}/kindle", wrapper.SendLensToKindle)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/places", wrapper.ListPlaces)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/search", wrapper.SearchItems)
