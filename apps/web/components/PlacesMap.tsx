@@ -44,6 +44,14 @@ export function PlacesMap({ places }: { places: MapPlace[] }) {
       zoom: pinned.length ? 11 : 1.5,
     });
     map.addControl(new maplibregl.NavigationControl(), "top-right");
+    map.addControl(
+      new maplibregl.GeolocateControl({
+        positionOptions: { enableHighAccuracy: true },
+        trackUserLocation: false,
+        showAccuracyCircle: false,
+      }),
+      "top-right",
+    );
     const bounds = new maplibregl.LngLatBounds();
     for (const p of pinned) {
       const popup = new maplibregl.Popup({ offset: 18 }).setHTML(

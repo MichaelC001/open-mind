@@ -45,7 +45,13 @@
       ],
       "expo-font",
       "expo-splash-screen",
-      "@bacons/apple-targets"
+      "@bacons/apple-targets",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Openmind to centre the places map on your location."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
