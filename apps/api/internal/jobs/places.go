@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
@@ -29,9 +30,10 @@ type ExtractPlacesArgs struct {
 func (ExtractPlacesArgs) Kind() string { return "extract_places" }
 
 // ExtractPlacesWorker pulls visitable places out of an item's caption text
-// (title + body) via the AI provider, optionally geocodes them, and replaces
-// the item's place rows. It runs as its own job, after enrichment, so a slow
-// geocoder or model never blocks or retries the core enrichment pipeline.
+// and, when a lead thumbnail is present, from on-screen text via vision. It
+// optionally geocodes them and replaces the item's place rows. It runs as its
+// own job, after enrichment, so a slow geocoder or model never blocks or
+// retries the core enrichment pipeline.
 type ExtractPlacesWorker struct {
 	river.WorkerDefaults[ExtractPlacesArgs]
 	Store    *store.Store
@@ -39,12 +41,15 @@ type ExtractPlacesWorker struct {
 	// Geocoder is optional (nil = geocoding off): places are then stored by
 	// name with no coordinates.
 	Geocoder geo.Geocoder
+	// HTTPClient fetches lead-image thumbnails for vision. Nil defaults to
+	// enrich.SafeHTTPClient inside fetchLeadImage.
+	HTTPClient *http.Client
 }
 
 // Work extracts and stores places for one item. Idempotent: it replaces the
 // item's full place set, so a re-run reproduces the same rows. A provider
-// that cannot extract places (noop) or an item with no caption text is a
-// clean no-op, never an error.
+// that cannot extract places (noop) or an item with neither caption text nor
+// a fetchable thumbnail is a clean no-op, never an error.
 func (w *ExtractPlacesWorker) Work(ctx context.Context, job *river.Job[ExtractPlacesArgs]) error {
 	q := w.Store.Queries
 	item, err := q.GetItem(ctx, db.GetItemParams{UserID: job.Args.UserID, ID: job.Args.ItemID})
@@ -52,23 +57,63 @@ func (w *ExtractPlacesWorker) Work(ctx context.Context, job *river.Job[ExtractPl
 		return fmt.Errorf("loading item %s: %w", job.Args.ItemID, err)
 	}
 
-	if strings.TrimSpace(item.Title+item.Body) == "" {
+	hasText := strings.TrimSpace(item.Title+item.Body) != ""
+	hasImage := strings.HasPrefix(item.LeadImageUrl, "http://") || strings.HasPrefix(item.LeadImageUrl, "https://")
+	if !hasText && !hasImage {
 		return nil
 	}
 
-	places, err := w.Provider.ExtractPlaces(ctx, item.Title, item.Body)
-	if errors.Is(err, ai.ErrNotSupported) {
-		return nil // noop provider: place extraction is simply off
-	}
-	if err != nil {
-		return fmt.Errorf("extracting places: %w", err)
+	// ran tracks whether any provider call succeeded (including an empty
+	// list). ErrNotSupported / fetch misses do not count — those leave any
+	// existing rows alone, matching Phase 1 noop behaviour. A successful
+	// empty extraction must still replace the place set so re-runs stay
+	// idempotent when the model finds nothing.
+	var captionPlaces, visionPlaces []ai.Place
+	ran := false
+
+	if hasText {
+		places, err := w.Provider.ExtractPlaces(ctx, item.Title, item.Body)
+		switch {
+		case errors.Is(err, ai.ErrNotSupported):
+			// noop / text-incapable: leave captionPlaces empty
+		case err != nil:
+			return fmt.Errorf("extracting places: %w", err)
+		default:
+			captionPlaces = places
+			ran = true
+		}
 	}
 
-	rows := make([]db.InsertItemPlaceParams, 0, len(places))
-	for _, p := range places {
+	if hasImage {
+		data, _ := fetchLeadImage(ctx, w.HTTPClient, item.LeadImageUrl)
+		if len(data) > 0 {
+			places, err := w.Provider.ExtractPlacesVision(ctx, item.Title, item.Body, data)
+			switch {
+			case errors.Is(err, ai.ErrNotSupported):
+				// Text-only provider: vision rung is simply off.
+			case err != nil:
+				// Vision is a best-effort bonus rung — never fail the job
+				// (and re-run caption extraction) because a thumbnail call
+				// hiccuped. A later re-run can still pick it up.
+				slog.Warn("vision place extraction failed, keeping caption results",
+					"item_id", item.ID, "err", err)
+			default:
+				visionPlaces = places
+				ran = true
+			}
+		}
+	}
+
+	if !ran {
+		return nil
+	}
+
+	merged := ai.MergePlacesWithSource(captionPlaces, visionPlaces)
+	rows := make([]db.InsertItemPlaceParams, 0, len(merged))
+	for _, p := range merged {
 		row := db.InsertItemPlaceParams{
 			UserID: item.UserID, ItemID: item.ID,
-			Name: p.Name, Hint: p.Hint, Source: "caption",
+			Name: p.Name, Hint: p.Hint, Source: p.Source,
 		}
 		// Geocoding is best-effort decoration: a miss or error leaves the
 		// place coordinate-less rather than failing (and re-running) the
@@ -93,7 +138,8 @@ func (w *ExtractPlacesWorker) Work(ctx context.Context, job *river.Job[ExtractPl
 	}
 
 	// Replace the item's place set atomically so a mid-write crash or retry
-	// can never leave a mix of old and new rows.
+	// can never leave a mix of old and new rows. An empty merged set clears
+	// prior rows (extraction ran and found nothing).
 	return pgx.BeginFunc(ctx, w.Store.Pool, func(tx pgx.Tx) error {
 		qtx := q.WithTx(tx)
 		if err := qtx.DeleteItemPlaces(ctx, db.DeleteItemPlacesParams{UserID: item.UserID, ItemID: item.ID}); err != nil {

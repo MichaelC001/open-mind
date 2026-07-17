@@ -26,3 +26,7 @@ func (*Noop) ParseQuery(_ context.Context, q string) (ParsedQuery, error) {
 func (*Noop) ExtractPlaces(context.Context, string, string) ([]Place, error) {
 	return nil, ErrNotSupported
 }
+
+func (*Noop) ExtractPlacesVision(context.Context, string, string, []byte) ([]Place, error) {
+	return nil, ErrNotSupported
+}

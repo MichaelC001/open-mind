@@ -47,6 +47,11 @@ func (s *stub) ExtractPlaces(context.Context, string, string) ([]Place, error) {
 	return s.places, s.err
 }
 
+func (s *stub) ExtractPlacesVision(context.Context, string, string, []byte) ([]Place, error) {
+	s.calls++
+	return s.places, s.err
+}
+
 func TestChainFalloverOnRetryable(t *testing.T) {
 	p1 := &stub{name: "p1", err: &RetryableError{Status: 429}}
 	p2 := &stub{name: "p2", summary: "ok"}

@@ -23,4 +23,10 @@ func TestNoopProvider(t *testing.T) {
 	if q, err := p.ParseQuery(ctx, "red poster"); err != nil || q.Text != "red poster" || q.Color != "" || len(q.Types) != 0 {
 		t.Errorf("ParseQuery = (%+v, %v), want text-only passthrough", q, err)
 	}
+	if _, err := p.ExtractPlaces(ctx, "t", "c"); !errors.Is(err, ai.ErrNotSupported) {
+		t.Errorf("ExtractPlaces err = %v, want ErrNotSupported", err)
+	}
+	if _, err := p.ExtractPlacesVision(ctx, "t", "c", []byte{1}); !errors.Is(err, ai.ErrNotSupported) {
+		t.Errorf("ExtractPlacesVision err = %v, want ErrNotSupported", err)
+	}
 }

@@ -5,10 +5,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"google.golang.org/genai"
 )
+
+// httpDetectImageMIME sniffs a content type from image bytes for multimodal
+// parts. Falls back to image/jpeg when the sniffer returns a non-image type
+// (Gemini rejects unknown MIME types; jpeg is the common reel thumbnail).
+func httpDetectImageMIME(data []byte) string {
+	mime := http.DetectContentType(data)
+	mime = strings.SplitN(mime, ";", 2)[0]
+	switch mime {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+		return mime
+	default:
+		return "image/jpeg"
+	}
+}
 
 const (
 	geminiGenModel   = "gemini-flash-lite-latest"
@@ -109,44 +124,71 @@ func (g *Gemini) ParseQuery(ctx context.Context, q string) (ParsedQuery, error) 
 	}, nil
 }
 
+// placesResponseSchema is the shared JSON schema for caption and vision place
+// extraction so both calls answer in the same shape.
+func placesResponseSchema() *genai.Schema {
+	return &genai.Schema{
+		Type: genai.TypeObject,
+		Properties: map[string]*genai.Schema{
+			"places": {Type: genai.TypeArray, Items: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"name":       {Type: genai.TypeString},
+					"hint":       {Type: genai.TypeString},
+					"confidence": {Type: genai.TypeNumber},
+				},
+			}},
+		},
+	}
+}
+
 // ExtractPlaces pulls the visitable places named in a video caption via a
 // JSON-mode call with a response schema, so the model can only answer in the
 // expected shape.
 func (g *Gemini) ExtractPlaces(ctx context.Context, title, caption string) ([]Place, error) {
 	cfg := &genai.GenerateContentConfig{
 		ResponseMIMEType: "application/json",
-		ResponseSchema: &genai.Schema{
-			Type: genai.TypeObject,
-			Properties: map[string]*genai.Schema{
-				"places": {Type: genai.TypeArray, Items: &genai.Schema{
-					Type: genai.TypeObject,
-					Properties: map[string]*genai.Schema{
-						"name": {Type: genai.TypeString},
-						"hint": {Type: genai.TypeString},
-					},
-				}},
-			},
-		},
+		ResponseSchema:   placesResponseSchema(),
 	}
 	prompt := fmt.Sprintf("%s\n\nTitle: %s\nCaption: %s", extractPlacesInstruction, truncate(title, 500), truncate(caption, 8000))
 	resp, err := g.client.Models.GenerateContent(ctx, geminiGenModel, genai.Text(prompt), cfg)
 	if err != nil {
 		return nil, fmt.Errorf("gemini extractplaces: %w", classifyGeminiErr(err))
 	}
-	var parsed struct {
-		Places []struct {
-			Name string `json:"name"`
-			Hint string `json:"hint"`
-		} `json:"places"`
-	}
+	var parsed placesJSON
 	if err := json.Unmarshal([]byte(resp.Text()), &parsed); err != nil {
 		return nil, fmt.Errorf("parsing gemini places: %w", err)
 	}
-	places := make([]Place, 0, len(parsed.Places))
-	for _, p := range parsed.Places {
-		places = append(places, Place{Name: p.Name, Hint: p.Hint})
+	return placesFromJSON(parsed), nil
+}
+
+// ExtractPlacesVision reads place names from a video thumbnail via a
+// multimodal JSON-mode call (image bytes + optional caption context).
+func (g *Gemini) ExtractPlacesVision(ctx context.Context, title, caption string, image []byte) ([]Place, error) {
+	if len(image) == 0 {
+		return nil, nil
 	}
-	return sanitisePlaces(places), nil
+	mime := httpDetectImageMIME(image)
+	cfg := &genai.GenerateContentConfig{
+		ResponseMIMEType: "application/json",
+		ResponseSchema:   placesResponseSchema(),
+	}
+	prompt := fmt.Sprintf("%s\n\nTitle: %s\nCaption: %s", extractPlacesVisionInstruction, truncate(title, 500), truncate(caption, 4000))
+	contents := []*genai.Content{
+		genai.NewContentFromParts([]*genai.Part{
+			genai.NewPartFromText(prompt),
+			genai.NewPartFromBytes(image, mime),
+		}, genai.RoleUser),
+	}
+	resp, err := g.client.Models.GenerateContent(ctx, geminiGenModel, contents, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("gemini extractplacesvision: %w", classifyGeminiErr(err))
+	}
+	var parsed placesJSON
+	if err := json.Unmarshal([]byte(resp.Text()), &parsed); err != nil {
+		return nil, fmt.Errorf("parsing gemini vision places: %w", err)
+	}
+	return placesFromJSON(parsed), nil
 }
 
 // classifyGeminiErr inspects a genai SDK error and wraps it as a

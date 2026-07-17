@@ -32,9 +32,12 @@ type ParsedQuery struct {
 // Place is a real-world location extracted from saved content (e.g. a cafe
 // named in an Instagram reel caption). Hint is the disambiguating locality
 // from the same text ("Lisbon", "Shibuya"), empty when the text gives none.
+// Confidence is the model's 0–1 grounding score; callers merge caption and
+// vision candidates by keeping the higher-confidence row per normalised name.
 type Place struct {
-	Name string
-	Hint string
+	Name       string
+	Hint       string
+	Confidence float64
 }
 
 // Provider is the adapter interface every AI backend must implement.
@@ -51,6 +54,10 @@ type Provider interface {
 	// text — never inferred or invented — and return ErrNotSupported when they
 	// cannot perform extraction (e.g. noop).
 	ExtractPlaces(ctx context.Context, title, caption string) ([]Place, error)
+	// ExtractPlacesVision returns places grounded in on-screen text overlays
+	// (and optionally the caption) visible in a video thumbnail. Text-only
+	// providers return ErrNotSupported; an empty image yields an empty list.
+	ExtractPlacesVision(ctx context.Context, title, caption string, image []byte) ([]Place, error)
 }
 
 // parseQueryInstruction is the shared system prompt for natural-language query
@@ -71,19 +78,53 @@ const parseQueryInstruction = `You interpret a natural-language search over a pe
 const extractPlacesInstruction = `You extract real-world, visitable places from the caption of a saved social-media video. ` +
 	`Return only specific named places a person could visit (cafes, restaurants, bars, hotels, shops, landmarks, parks, museums) that the text itself names. ` +
 	`Never invent, infer, or complete place names that are not present in the text; if the text names none, return an empty list. ` +
-	`For each place set "hint" to the city/area/country the same text gives for it (or "" if none). ` +
-	`Respond with only a JSON object of the form {"places": [{"name": string, "hint": string}]}. ` +
-	`Example: "3 cafes you must try in Lisbon: Fabrica, Copenhagen Coffee Lab" -> {"places":[{"name":"Fabrica","hint":"Lisbon"},{"name":"Copenhagen Coffee Lab","hint":"Lisbon"}]}.`
+	`For each place set "hint" to the city/area/country the same text gives for it (or "" if none), and "confidence" to a number from 0 to 1 reflecting how clearly the text names that place. ` +
+	`Respond with only a JSON object of the form {"places": [{"name": string, "hint": string, "confidence": number}]}. ` +
+	`Example: "3 cafes you must try in Lisbon: Fabrica, Copenhagen Coffee Lab" -> {"places":[{"name":"Fabrica","hint":"Lisbon","confidence":0.95},{"name":"Copenhagen Coffee Lab","hint":"Lisbon","confidence":0.95}]}.`
 
-// sanitisePlaces trims, de-duplicates (case-insensitive by name), and drops
-// empty or overlong names from a model-proposed place list, returning nil when
-// nothing remains.
+// extractPlacesVisionInstruction is the shared system prompt for thumbnail
+// vision place extraction. Places must be grounded in readable on-screen text
+// (overlays, captions burned into the frame), not inferred from scenery.
+const extractPlacesVisionInstruction = `You extract real-world, visitable places from a social-media video thumbnail image. ` +
+	`Read on-screen text overlays and any place names visible in the image; you may use the optional title/caption only to disambiguate a name you can already see. ` +
+	`Return only specific named places a person could visit (cafes, restaurants, bars, hotels, shops, landmarks, parks, museums). ` +
+	`Never invent places from vibes, cuisine cues, or scenery alone; if no place name is readable, return an empty list. ` +
+	`For each place set "hint" to any city/area/country visible in the image or caption (or "" if none), and "confidence" to a number from 0 to 1 reflecting how clearly the name appears. ` +
+	`Respond with only a JSON object of the form {"places": [{"name": string, "hint": string, "confidence": number}]}.`
+
+// placesResponseSchema fields shared by caption and vision JSON-mode calls.
+type placesJSON struct {
+	Places []struct {
+		Name       string  `json:"name"`
+		Hint       string  `json:"hint"`
+		Confidence float64 `json:"confidence"`
+	} `json:"places"`
+}
+
+func placesFromJSON(parsed placesJSON) []Place {
+	places := make([]Place, 0, len(parsed.Places))
+	for _, p := range parsed.Places {
+		places = append(places, Place{Name: p.Name, Hint: p.Hint, Confidence: p.Confidence})
+	}
+	return sanitisePlaces(places)
+}
+
+// sanitisePlaces trims, de-duplicates (case-insensitive by name), clamps
+// confidence to [0,1], and drops empty or overlong names, returning nil when
+// nothing remains. A missing confidence (0) is left as 0 so callers can apply
+// a source-specific default when merging.
 func sanitisePlaces(in []Place) []Place {
 	seen := make(map[string]bool, len(in))
 	out := make([]Place, 0, len(in))
 	for _, p := range in {
 		p.Name = strings.TrimSpace(p.Name)
 		p.Hint = strings.TrimSpace(p.Hint)
+		if p.Confidence < 0 {
+			p.Confidence = 0
+		}
+		if p.Confidence > 1 {
+			p.Confidence = 1
+		}
 		key := strings.ToLower(p.Name)
 		if p.Name == "" || len(p.Name) > 200 || seen[key] {
 			continue
@@ -93,6 +134,59 @@ func sanitisePlaces(in []Place) []Place {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// Placed is a Place tagged with which signal produced (or won) it.
+type Placed struct {
+	Place
+	Source string // "caption" or "vision"
+}
+
+// MergePlacesWithSource combines caption- and vision-sourced candidates by
+// normalised name, keeping the higher-confidence row and the winning signal
+// name for item_places.source. On a confidence tie, caption wins (text is the
+// cheaper, more grounded signal). Missing confidence (0) gets a source
+// default: 0.85 for caption, 0.7 for vision.
+func MergePlacesWithSource(caption, vision []Place) []Placed {
+	type tagged struct {
+		Place
+		source string
+	}
+	byName := make(map[string]tagged, len(caption)+len(vision))
+	order := make([]string, 0, len(caption)+len(vision))
+
+	add := func(p Place, source string, defaultConf float64) {
+		if p.Confidence == 0 {
+			p.Confidence = defaultConf
+		}
+		key := strings.ToLower(strings.TrimSpace(p.Name))
+		if key == "" {
+			return
+		}
+		cur, ok := byName[key]
+		if !ok {
+			byName[key] = tagged{Place: p, source: source}
+			order = append(order, key)
+			return
+		}
+		if p.Confidence > cur.Confidence {
+			byName[key] = tagged{Place: p, source: source}
+		}
+	}
+
+	for _, p := range caption {
+		add(p, "caption", 0.85)
+	}
+	for _, p := range vision {
+		add(p, "vision", 0.7)
+	}
+
+	out := make([]Placed, 0, len(order))
+	for _, key := range order {
+		t := byName[key]
+		out = append(out, Placed{Place: t.Place, Source: t.source})
 	}
 	return out
 }
