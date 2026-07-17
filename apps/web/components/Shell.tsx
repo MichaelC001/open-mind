@@ -3,6 +3,7 @@ import Link from "next/link";
 import { tokens } from "@openmind/ui";
 import { getLenses } from "../lib/lenses";
 import { lensDot } from "../lib/lens-format";
+import { ShellDrawer } from "./ShellDrawer";
 
 const navBase = {
   display: "flex",
@@ -37,6 +38,7 @@ export async function Shell({
   const mindActive = !activeLensId && !activeDesk && !activeDrift && !activeFeed && !activePlaces;
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
+      <ShellDrawer>
       <aside
         style={{
           width: 230,
@@ -296,6 +298,7 @@ export async function Shell({
           </div>
         </div>
       </aside>
+      </ShellDrawer>
 
       {/* Fluid main column */}
       <div
