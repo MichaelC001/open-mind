@@ -2,7 +2,7 @@
 // a web session (the API is reached with the device key, and "Open original"
 // goes to the public source URL). Mirrors the web reader's shape: kicker,
 // serif title, summary lead, archived body, tags.
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { openBrowserAsync } from "expo-web-browser";
@@ -21,12 +21,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import { ApiError, getItem, type ItemDetail } from "@/lib/api";
 import { cardKind } from "@/lib/cards";
-import { useDeleteItem, useInvalidateLists, useKeepItem, usePinItem } from "@/lib/mutations";
+import { useDeleteItem, useKeepItem, usePinItem } from "@/lib/mutations";
 import { queryKeys } from "@/lib/query";
 import { colors, fonts, radius, spacing, typeGradients, type CardKind } from "@/lib/theme";
 import { stripMarkdown } from "@/lib/text";
-
-type ReadyState = { kind: "ready"; item: ItemDetail };
 
 /** Types that get a gradient hero wash on the detail screen. */
 const HERO_KINDS: readonly CardKind[] = ["article", "image", "product", "book", "recipe", "video", "tweet"];
@@ -55,8 +53,6 @@ function PaletteDots({ dots }: { dots: string[] }) {
 export default function ItemScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const qc = useQueryClient();
-  const invalidate = useInvalidateLists();
   const pinItem = usePinItem();
   const keepItem = useKeepItem();
   const deleteItemFn = useDeleteItem();
@@ -81,41 +77,28 @@ export default function ItemScreen() {
     if (!item) return;
     void (async () => {
       setBusy("pin");
+      // pinItem already patches the item + list caches (and rolls back on failure).
       await pinItem(item);
-      // Refresh detail from cache/server so pinnedAt updates immediately.
-      const res = await getItem(item.id);
-      if (res.ok && res.item) {
-        qc.setQueryData(queryKeys.item(item.id), res.item);
-      } else {
-        qc.setQueryData(queryKeys.item(item.id), {
-          ...item,
-          pinnedAt: item.pinnedAt ? null : new Date().toISOString(),
-        });
-      }
       setBusy(null);
     })();
-  }, [item, pinItem, qc]);
+  }, [item, pinItem]);
 
   const onKeep = useCallback(() => {
     if (!item) return;
     void (async () => {
       setBusy("keep");
+      // keepItem already patches caches; do not re-flip from a stale closure.
       await keepItem(item);
-      qc.setQueryData(queryKeys.item(item.id), {
-        ...item,
-        keptAt: item.keptAt ? null : new Date().toISOString(),
-      });
       setBusy(null);
     })();
-  }, [item, keepItem, qc]);
+  }, [item, keepItem]);
 
   const onDelete = useCallback(() => {
     if (!item) return;
     deleteItemFn(item, () => {
-      invalidate();
       router.back();
     });
-  }, [item, deleteItemFn, invalidate, router]);
+  }, [item, deleteItemFn, router]);
 
   const onCopyLink = useCallback(() => {
     if (!item?.url) return;
@@ -428,6 +411,3 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
 });
-
-// Silence unused ReadyState if tree-shaken oddly — kept for clarity of the prior shape.
-void (null as unknown as ReadyState);

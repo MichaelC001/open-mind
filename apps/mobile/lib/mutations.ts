@@ -19,8 +19,10 @@ function patchItemInCaches(
   qc.setQueriesData<Item[]>({ queryKey: ["feed"] }, apply);
   qc.setQueriesData<Item[]>({ queryKey: queryKeys.desk() }, (prev) => {
     if (!prev) return prev;
-    // Unpinning removes from desk; pinning adds only after invalidate.
+    // Unpinning removes from desk immediately.
     if (patch.pinnedAt === null) return prev.filter((it) => it.id !== id);
+    // Pinning: if the item isn't on desk yet, leave lists to invalidate
+    // (we may not have the full item here). Just patch badge fields if present.
     return apply(prev) ?? prev;
   });
   qc.setQueriesData<LibraryData>({ queryKey: ["items"] }, (prev) =>
@@ -55,9 +57,25 @@ export function usePinItem() {
       const next = !item.pinnedAt;
       const pinnedAt = next ? new Date().toISOString() : null;
       patchItemInCaches(qc, item.id, { pinnedAt });
+      // When pinning, prepend onto desk cache so Desk updates without waiting.
+      if (next) {
+        qc.setQueriesData<Item[]>({ queryKey: queryKeys.desk() }, (prev) => {
+          if (!prev) return prev;
+          if (prev.some((it) => it.id === item.id)) {
+            return prev.map((it) => (it.id === item.id ? { ...it, pinnedAt } : it));
+          }
+          return [{ ...item, pinnedAt }, ...prev];
+        });
+      }
       const res = await setPinned(item.id, next);
       if (!res.ok) {
         patchItemInCaches(qc, item.id, { pinnedAt: item.pinnedAt ?? null });
+        if (next) {
+          // Roll back the optimistic desk prepend.
+          qc.setQueriesData<Item[]>({ queryKey: queryKeys.desk() }, (prev) =>
+            prev?.filter((it) => it.id !== item.id),
+          );
+        }
         Alert.alert("Couldn't update pin", "Please try again.");
         return;
       }
@@ -89,7 +107,7 @@ export function useKeepItem() {
   );
 }
 
-/** Confirm + delete, then invalidate lists. */
+/** Confirm + delete, then drop from list caches immediately. */
 export function useDeleteItem() {
   const invalidate = useInvalidateLists();
   const qc = useQueryClient();
@@ -104,7 +122,6 @@ export function useDeleteItem() {
         }
         void qc.removeQueries({ queryKey: queryKeys.item(item.id) });
         // Drop from list caches immediately so back-nav doesn't flash the gone card.
-        patchItemInCaches(qc, item.id, {});
         qc.setQueriesData<Item[]>({ queryKey: ["feed"] }, (prev) =>
           prev?.filter((it) => it.id !== item.id),
         );
