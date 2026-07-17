@@ -354,6 +354,28 @@ export async function deleteItem(
   }
 }
 
+/**
+ * Send an item to the user's Kindle via POST {instanceUrl}/api/items/{id}/kindle.
+ * 202 = queued; 409 = Send-to-Kindle not configured (SMTP or Kindle address
+ * missing); 422 = item has no archived body to send.
+ */
+export async function sendItemToKindle(
+  id: string,
+  override?: Settings,
+): Promise<{ ok: boolean; status: number }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0 };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/items/${id}/kindle`, {
+      method: "POST",
+      headers: authHeaders(settings.token),
+    });
+    return { ok: res.status === 202, status: res.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
+
 /** A place the pipeline extracted from an item (see GET /items/{id}/places). */
 export type Place = {
   id: string;
