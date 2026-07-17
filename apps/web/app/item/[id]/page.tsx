@@ -18,6 +18,8 @@ import { TagEditor } from "./TagEditor";
 
 const { color, font } = tokens;
 
+type Place = { id: string; name: string; hint: string; address: string; lat?: number; lng?: number; source: string };
+
 const backLink: CSSProperties = {
   fontFamily: font.mono,
   fontSize: "0.78rem",
@@ -181,7 +183,7 @@ function OpenOriginal({ url }: { url: string }) {
 }
 
 /** Right-hand rail: palette swatches, tags, and the archive assurance line. */
-function Rail({ item }: { item: ItemDetail }) {
+function Rail({ item, places }: { item: ItemDetail; places: Place[] }) {
   const tags = item.tags ?? [];
   const colors =
     item.palette && item.palette.length > 0
@@ -239,6 +241,36 @@ function Rail({ item }: { item: ItemDetail }) {
           <div style={{ marginTop: 10 }}>
             <KeepButton itemId={item.id} kept={!!item.keptAt} />
           </div>
+        </>
+      ) : null}
+      {places.length > 0 ? (
+        <>
+          {divider}
+          <div className="meta" style={{ color: color.inkFaintAlt }}>Places</div>
+          {places.map((p) => (
+            <div key={p.id} style={{ marginTop: 9 }}>
+              <div style={{ fontFamily: font.sans, fontSize: 13, fontWeight: 600, color: color.ink }}>
+                {p.name}
+              </div>
+              {p.address ? (
+                <div style={{ fontFamily: font.sans, fontSize: 12, lineHeight: 1.4, color: color.inkMuted, marginTop: 2 }}>
+                  {p.address}
+                </div>
+              ) : null}
+              <a
+                href={
+                  p.lat != null && p.lng != null
+                    ? `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`
+                    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.name} ${p.hint}`.trim())}`
+                }
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontFamily: font.mono, fontSize: 11, color: color.cobalt, textDecoration: "none" }}
+              >
+                Open in maps ↗
+              </a>
+            </div>
+          ))}
         </>
       ) : null}
       {divider}
@@ -346,6 +378,9 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   if (!res.ok) notFound();
   const item = (await res.json()) as ItemDetail;
 
+  const placesRes = await apiFetch(`/items/${id}/places`);
+  const places: Place[] = placesRes.ok ? await placesRes.json() : [];
+
   return (
     <main
       style={{
@@ -405,7 +440,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
           {item.title ? <Title>{item.title}</Title> : null}
           <ReaderContent item={item} />
         </div>
-        <Rail item={item} />
+        <Rail item={item} places={places} />
       </article>
     </main>
   );
