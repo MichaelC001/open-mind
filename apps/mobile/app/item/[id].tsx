@@ -10,6 +10,8 @@ import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -17,9 +19,10 @@ import {
   Text,
   View,
 } from "react-native";
+import MapView, { Marker } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
-import { ApiError, getItem, type ItemDetail } from "@/lib/api";
+import { ApiError, getItem, getItemPlaces, type ItemDetail, type Place } from "@/lib/api";
 import { cardKind } from "@/lib/cards";
 import { useDeleteItem, useKeepItem, usePinItem } from "@/lib/mutations";
 import { queryKeys } from "@/lib/query";
@@ -72,6 +75,17 @@ export default function ItemScreen() {
   });
 
   const item = itemQuery.data;
+
+  const placesQuery = useQuery({
+    queryKey: queryKeys.itemPlaces(itemId),
+    enabled: itemId.length > 0,
+    queryFn: async () => {
+      const res = await getItemPlaces(itemId);
+      if (!res.ok) throw new ApiError(res.status);
+      return res.places;
+    },
+    staleTime: 30_000,
+  });
 
   const onPin = useCallback(() => {
     if (!item) return;
@@ -156,6 +170,7 @@ export default function ItemScreen() {
             : null
         }
         item={item}
+        places={placesQuery.data ?? []}
         onCopyLink={onCopyLink}
         onShare={onShare}
       />
@@ -163,16 +178,80 @@ export default function ItemScreen() {
   );
 }
 
+function googleMapsSearchUrl(p: Place): string {
+  const q = [p.name, p.hint].filter(Boolean).join(" ");
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
+
+function PlacesSection({ places }: { places: Place[] }) {
+  if (places.length === 0) return null;
+  const pinned = places.filter(
+    (p): p is Place & { lat: number; lng: number } =>
+      typeof p.lat === "number" && typeof p.lng === "number",
+  );
+  const first = pinned[0];
+
+  return (
+    <View style={styles.placesSection}>
+      {first ? (
+        <MapView
+          style={styles.placesMap}
+          initialRegion={{
+            latitude: first.lat,
+            longitude: first.lng,
+            latitudeDelta: 0.08,
+            longitudeDelta: 0.08,
+          }}
+          scrollEnabled={false}
+          zoomEnabled={false}
+          pitchEnabled={false}
+          rotateEnabled={false}
+        >
+          {pinned.map((p) => (
+            <Marker key={p.id} coordinate={{ latitude: p.lat, longitude: p.lng }} title={p.name} />
+          ))}
+        </MapView>
+      ) : null}
+      {places.map((p) => {
+        const hasCoords = typeof p.lat === "number" && typeof p.lng === "number";
+        const onPress = () => {
+          if (hasCoords) {
+            const url =
+              Platform.OS === "ios"
+                ? `maps:0,0?q=${encodeURIComponent(p.name)}@${p.lat},${p.lng}`
+                : `geo:${p.lat},${p.lng}?q=${encodeURIComponent(p.name)}`;
+            void Linking.openURL(url);
+          } else {
+            void Linking.openURL(googleMapsSearchUrl(p));
+          }
+        };
+        return (
+          <Pressable
+            key={p.id}
+            style={({ pressed }) => [styles.placeRow, pressed && styles.placeRowPressed]}
+            onPress={onPress}
+          >
+            <Text style={styles.placeName}>{p.name}</Text>
+            {p.address ? <Text style={styles.placeAddress}>{p.address}</Text> : null}
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 function Body({
   isPending,
   error,
   item,
+  places,
   onCopyLink,
   onShare,
 }: {
   isPending: boolean;
   error: string | null;
   item?: ItemDetail;
+  places: Place[];
   onCopyLink: () => void;
   onShare: () => void;
 }) {
@@ -216,6 +295,7 @@ function Body({
         {item.url ? <OpenOriginalPill url={item.url} /> : null}
         {item.url ? <SecondaryActions onCopyLink={onCopyLink} onShare={onShare} /> : null}
         {tags.length > 0 ? <TagsRow tags={tags} /> : null}
+        <PlacesSection places={places} />
       </ScrollView>
     );
   }
@@ -237,6 +317,7 @@ function Body({
       {item.url ? <OpenOriginalPill url={item.url} /> : null}
       {item.url ? <SecondaryActions onCopyLink={onCopyLink} onShare={onShare} /> : null}
       {tags.length > 0 ? <TagsRow tags={tags} /> : null}
+      <PlacesSection places={places} />
       {paragraphs.length > 0 ? (
         <View style={styles.bodyBlock}>
           {paragraphs.map((p, i) => (
@@ -372,6 +453,19 @@ const styles = StyleSheet.create({
   },
   secondaryText: { fontFamily: fonts.sansMedium, fontSize: 13, color: colors.inkMuted },
   tagsRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.lg },
+  placesSection: { marginBottom: spacing.lg },
+  placesMap: { height: 160, borderRadius: radius.card, marginBottom: spacing.md },
+  placeRow: {
+    borderRadius: radius.card,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.cardSurface,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  placeRowPressed: { opacity: 0.7 },
+  placeName: { fontFamily: fonts.sansSemiBold, fontSize: 14, color: colors.ink },
+  placeAddress: { fontFamily: fonts.sans, fontSize: 12, color: colors.inkMuted, marginTop: 2 },
   tag: {
     backgroundColor: colors.canvas,
     borderRadius: radius.button,
