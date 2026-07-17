@@ -43,4 +43,29 @@ func TestReadabilityExtract(t *testing.T) {
 	if strings.Contains(got.Body, "Subscribe to our newsletter") {
 		t.Errorf("body contains boilerplate")
 	}
+	if got.LeadImageURL != "https://example.com/images/commonplace-books.jpg" {
+		t.Errorf("lead image = %q, want og:image", got.LeadImageURL)
+	}
+}
+
+func TestReadabilityLeadImageFallsBackToBodyImg(t *testing.T) {
+	html, err := os.ReadFile("testdata/article_no_og_image.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(html)
+	}))
+	defer srv.Close()
+
+	ex := enrich.NewReadability(srv.Client())
+	got, err := ex.Extract(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	want := "https://static.simonwillison.net/static/2026/mermaid-ascii.webp"
+	if got.LeadImageURL != want {
+		t.Errorf("lead image = %q, want body img %q", got.LeadImageURL, want)
+	}
 }
