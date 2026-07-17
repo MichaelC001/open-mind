@@ -5,6 +5,7 @@ import type { Item } from "@/lib/api";
 import { cardKind, typeLabel } from "@/lib/cards";
 import type { Settings } from "@/lib/settings";
 import { colors, fonts, radius, spacing, type, typeGradients, type CardKind } from "@/lib/theme";
+import { stripMarkdown } from "@/lib/text";
 
 /** Extract a bare host (no scheme, no www., no path) from a URL, or null. */
 function hostOf(url?: string): string | null {
@@ -117,7 +118,9 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
   const domain = hostOf(item.url);
   const dots = item.palette ?? [];
   const source = imageSource(item.leadImageUrl, settings);
-  const title = item.title?.trim() || domain || item.url || "Untitled";
+  const rawTitle = stripMarkdown(item.title?.trim());
+  const title = rawTitle || domain || item.url || "Untitled";
+  const summary = stripMarkdown(item.summary);
 
   const press = () => onPress(item);
   const wrap = (children: React.ReactNode) => (
@@ -131,8 +134,8 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
   );
 
   if (kind === "quote") {
-    const text = item.summary ?? item.title ?? "";
-    const attribution = item.summary && item.title ? item.title : null;
+    const text = summary || rawTitle;
+    const attribution = summary && rawTitle ? rawTitle : null;
     return wrap(
       <View style={[styles.body, { backgroundColor: colors.ink, borderRadius: radius.card }]}>
         <Text style={styles.quoteGlyph}>&ldquo;</Text>
@@ -147,7 +150,7 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
   }
 
   if (kind === "note") {
-    const text = item.summary ?? item.title ?? "Untitled note";
+    const text = summary || rawTitle || "Untitled note";
     return wrap(
       <View style={[styles.body, { backgroundColor: colors.note, borderRadius: radius.card }]}>
         <Text style={styles.noteKicker}>NOTE</Text>
@@ -168,9 +171,9 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
       <View>
         <Hero kind={kind} dots={dots} source={source} height={180} />
         <View style={styles.body}>
-          {item.title ? (
+          {rawTitle ? (
             <Text style={styles.cardTitle} numberOfLines={2}>
-              {item.title}
+              {rawTitle}
             </Text>
           ) : null}
           <View style={styles.footerRow}>
@@ -191,9 +194,9 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
         <Text style={styles.cardTitle} numberOfLines={2}>
           {title}
         </Text>
-        {item.summary ? (
+        {summary ? (
           <Text style={styles.summary} numberOfLines={2}>
-            {item.summary}
+            {summary}
           </Text>
         ) : null}
         <View style={styles.footerRow}>
