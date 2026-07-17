@@ -46,7 +46,7 @@ export default async function PlacesPage() {
         </div>
       </div>
 
-      {pinned.length === 0 ? (
+      {places.length === 0 ? (
         <div style={{ padding: "22px 28px 40px" }}>
           <p
             style={{
@@ -63,17 +63,26 @@ export default async function PlacesPage() {
           </p>
         </div>
       ) : (
-        <div style={{ position: "relative", flex: 1 }}>
-          <PlacesMap places={pinned} />
-        </div>
-      )}
+        <>
+          {pinned.length > 0 && (
+            <div style={{ position: "relative", flex: 1 }}>
+              <PlacesMap places={pinned} />
+            </div>
+          )}
 
-      {unpinned.length > 0 && (
-        <div style={{ padding: "16px 28px 32px", borderTop: `1px solid ${color.hairline}` }}>
-          <div className="meta" style={{ color: color.inkFaint, marginBottom: 10 }}>
-            Not on the map
-          </div>
-          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+          {unpinned.length > 0 && (
+            <div style={{ padding: "16px 28px 32px", borderTop: pinned.length > 0 ? `1px solid ${color.hairline}` : undefined }}>
+              {pinned.length === 0 && (
+                <div className="meta" style={{ color: color.inkFaint, marginBottom: 16 }}>
+                  None of your places have map coordinates yet.
+                </div>
+              )}
+              {pinned.length > 0 && (
+                <div className="meta" style={{ color: color.inkFaint, marginBottom: 10 }}>
+                  Not on the map
+                </div>
+              )}
+              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
             {unpinned.map((p) => {
               const query = encodeURIComponent(`${p.name} ${p.hint}`.trim());
               return (
@@ -109,8 +118,10 @@ export default async function PlacesPage() {
                 </li>
               );
             })}
-          </ul>
-        </div>
+              </ul>
+            </div>
+          )}
+        </>
       )}
     </Shell>
   );

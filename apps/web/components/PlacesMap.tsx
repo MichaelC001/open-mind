@@ -47,7 +47,7 @@ export function PlacesMap({ places }: { places: MapPlace[] }) {
     const bounds = new maplibregl.LngLatBounds();
     for (const p of pinned) {
       const popup = new maplibregl.Popup({ offset: 18 }).setHTML(
-        `<strong>${escapeHtml(p.name)}</strong><br/>${escapeHtml(p.address)}<br/><a href="/item/${p.itemId}">${escapeHtml(p.itemTitle || "View item")}</a>`,
+        `<strong>${escapeHtml(p.name)}</strong><br/>${escapeHtml(p.address)}<br/><a href="/item/${encodeURIComponent(p.itemId)}">${escapeHtml(p.itemTitle || "View item")}</a>`,
       );
       new maplibregl.Marker({ color: tokens.color.cobalt }).setLngLat([p.lng, p.lat]).setPopup(popup).addTo(map);
       bounds.extend([p.lng, p.lat]);
