@@ -213,20 +213,17 @@ func (o *OpenAI) ExtractPlaces(ctx context.Context, title, caption string) ([]Pl
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("openai extractplaces: empty response")
 	}
-	var parsed struct {
-		Places []struct {
-			Name string `json:"name"`
-			Hint string `json:"hint"`
-		} `json:"places"`
-	}
+	var parsed placesJSON
 	if err := json.Unmarshal([]byte(resp.Choices[0].Message.Content), &parsed); err != nil {
 		return nil, fmt.Errorf("parsing openai places: %w", err)
 	}
-	places := make([]Place, 0, len(parsed.Places))
-	for _, p := range parsed.Places {
-		places = append(places, Place{Name: p.Name, Hint: p.Hint})
-	}
-	return sanitisePlaces(places), nil
+	return placesFromJSON(parsed), nil
+}
+
+// ExtractPlacesVision is not implemented for OpenAI-compatible text endpoints;
+// multimodal support varies wildly across providers behind this adapter.
+func (*OpenAI) ExtractPlacesVision(context.Context, string, string, []byte) ([]Place, error) {
+	return nil, ErrNotSupported
 }
 
 // doJSON performs a POST with a JSON body and decodes a JSON response,

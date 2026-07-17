@@ -10,16 +10,18 @@
 - (see Issues)
 
 ## Later
-- Reel places Phase 2 + 4: thumbnail vision, MCP `item_places` tool, optional
-  yt-dlp deep media — see `docs/superpowers/specs/20260716-reel-places-design.md`
+- Reel places Phase 4: optional yt-dlp deep media — see
+  `docs/superpowers/specs/20260716-reel-places-design.md`
+- Reel places Phase 3 leftover: MCP `item_places` tool
 - Places map follow-ups: marker clustering, Android Google Maps API key,
   consolidate web Place types via api-client `paths[]`, note OSM tile runtime
   dep in self-hosting docs
 - Lossless AVIF metadata stripping / re-allow AVIF uploads
-- Omnivore import slice B: ingest archived content from export zips so dead links survive
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Reel places Phase 2: thumbnail vision (`ExtractPlacesVision` on Gemini,
+  caption+vision merge by confidence) (2026-07-17)
 - Places map on web + mobile (GET /places, /places MapLibre page, item-rail
   places, react-native-maps screen — needs new dev build) + Google Places
   geocoder (2026-07-17)

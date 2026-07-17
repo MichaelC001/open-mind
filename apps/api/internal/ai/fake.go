@@ -43,13 +43,27 @@ func (*Fake) ParseQuery(_ context.Context, q string) (ParsedQuery, error) {
 
 // ExtractPlaces returns a stable two-place list so job tests can assert
 // idempotency, and an empty list for an empty caption so no-signal paths are
-// testable too.
+// testable too. Confidences are intentionally below the Fake vision fixture
+// for "Fake Cafe" so merge tests can assert vision wins on overlap.
 func (*Fake) ExtractPlaces(_ context.Context, _, caption string) ([]Place, error) {
 	if caption == "" {
 		return nil, nil
 	}
 	return []Place{
-		{Name: "Fake Cafe", Hint: "Faketown"},
-		{Name: "Fake Museum", Hint: ""},
+		{Name: "Fake Cafe", Hint: "Faketown", Confidence: 0.6},
+		{Name: "Fake Museum", Hint: "", Confidence: 0.7},
+	}, nil
+}
+
+// ExtractPlacesVision returns a deterministic vision fixture when image bytes
+// are present: an overlapping cafe (higher confidence than caption) plus a
+// vision-only landmark. Empty image → no places (mirrors "no thumbnail").
+func (*Fake) ExtractPlacesVision(_ context.Context, _, _ string, image []byte) ([]Place, error) {
+	if len(image) == 0 {
+		return nil, nil
+	}
+	return []Place{
+		{Name: "Fake Cafe", Hint: "Faketown", Confidence: 0.95},
+		{Name: "Vision Landmark", Hint: "Faketown", Confidence: 0.8},
 	}, nil
 }

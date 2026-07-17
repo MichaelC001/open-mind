@@ -104,13 +104,17 @@ place).
   schema + `GET /items/{id}/places` → `200 [Place]` (empty when none),
   `404` unknown/cross-tenant. Go + TS regenerated. No `Item` shape change.
 
-## Phase 2 — thumbnail vision
+## Phase 2 — thumbnail vision (shipped)
 
-- Provider gains an image-capable extraction (e.g.
-  `ExtractPlacesVision(ctx, title, caption string, image []byte)`);
+- Provider gains
+  `ExtractPlacesVision(ctx, title, caption string, image []byte)`;
   Gemini implements via multimodal parts, others return `ErrNotSupported`.
-  Job fetches `og:image` bytes (size-capped), merges vision candidates
-  with caption candidates by normalised name, keeps the higher confidence.
+  Job fetches lead-image (`og:image`) bytes via the existing size-capped
+  `fetchLeadImage`, merges vision candidates with caption candidates by
+  normalised name (higher confidence wins; tie → caption), and stores
+  `source` as `caption` or `vision`. Vision failures are best-effort
+  (warn + keep caption results); empty caption + thumbnail still runs
+  vision alone.
 
 ## Phase 3 — surfacing
 

@@ -646,7 +646,7 @@ components:
         address: { type: string, description: "geocoder display address; empty when not geocoded" }
         lat: { type: number, format: double }
         lng: { type: number, format: double }
-        source: { type: string, description: "which signal produced this place (caption)" }
+        source: { type: string, description: "which signal produced this place (caption or vision)" }
     PlaceWithItem:
       allOf:
         - $ref: "#/components/schemas/Place"

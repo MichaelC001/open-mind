@@ -63,7 +63,7 @@ func NewChain(entries ...ChainEntry) *Chain {
 func (c *Chain) Name() string { return c.name }
 
 // runChain applies op to each provider in order until one succeeds, sharing the
-// fallover logic across all four Provider operations (DRY). ErrNotSupported is
+// fallover logic across all Provider operations (DRY). ErrNotSupported is
 // skipped silently; retryable/other errors are logged and cause fail-over; a
 // saturated limiter is treated as a retryable fallover. When every provider
 // reported ErrNotSupported the chain returns ErrNotSupported; otherwise it
@@ -147,5 +147,13 @@ func (c *Chain) ParseQuery(ctx context.Context, q string) (ParsedQuery, error) {
 func (c *Chain) ExtractPlaces(ctx context.Context, title, caption string) ([]Place, error) {
 	return runChain(ctx, c, "extractplaces", func(p Provider) ([]Place, error) {
 		return p.ExtractPlaces(ctx, title, caption)
+	})
+}
+
+// ExtractPlacesVision tries each provider in order until one returns places
+// from a thumbnail (Gemini implements; text-only providers skip).
+func (c *Chain) ExtractPlacesVision(ctx context.Context, title, caption string, image []byte) ([]Place, error) {
+	return runChain(ctx, c, "extractplacesvision", func(p Provider) ([]Place, error) {
+		return p.ExtractPlacesVision(ctx, title, caption, image)
 	})
 }
