@@ -168,7 +168,7 @@ func normalizeSocialVideo(ogTitle, ogBody, label string) (title, body string) {
 	if body == "" {
 		body = caption
 	}
-	title = socialVideoTitle(author, caption, raw, label)
+	title = socialVideoTitle(author, caption, label)
 	return title, body
 }
 
@@ -195,19 +195,22 @@ func splitSocialVideoTitle(title string) (author, caption string) {
 
 // socialVideoTitle builds a short display title: prefer "Author: hook" from a
 // peeled caption, else a capped first line of the raw OG title, else the
-// platform label.
-func socialVideoTitle(author, caption, raw, label string) string {
+// platform label. Platform fallbacks use `label` (from the URL host), never a
+// substring search on the OG title — handles like "TikTokFan on Instagram"
+// must not flip to TikTok.
+func socialVideoTitle(author, caption, label string) string {
 	hook := firstTitleHook(caption)
 	if author != "" && hook != "" {
 		return truncateRunes(author+": "+hook, socialVideoTitleMax)
 	}
 	if author != "" {
-		if strings.Contains(raw, "TikTok") {
-			return truncateRunes(author+" on TikTok", socialVideoTitleMax)
+		platform := "Instagram"
+		if strings.HasPrefix(label, "TikTok") {
+			platform = "TikTok"
 		}
-		return truncateRunes(author+" on Instagram", socialVideoTitleMax)
+		return truncateRunes(author+" on "+platform, socialVideoTitleMax)
 	}
-	if hook = firstTitleHook(raw); hook != "" {
+	if hook = firstTitleHook(caption); hook != "" {
 		return truncateRunes(hook, socialVideoTitleMax)
 	}
 	return label

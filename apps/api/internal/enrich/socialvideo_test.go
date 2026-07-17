@@ -115,7 +115,6 @@ func TestExtractOpenGraph(t *testing.T) {
 }
 
 func TestNormalizeSocialVideo(t *testing.T) {
-	const label = "Instagram reel"
 	longCaption := "Hyderabad has a food scene like no other — and these 3 Telugu restaurants are rewriting the rulebook! " +
 		"Thamara — for the ones who love a slow meal. Gamyam — where tradition meets craft."
 
@@ -123,6 +122,7 @@ func TestNormalizeSocialVideo(t *testing.T) {
 		name      string
 		ogTitle   string
 		ogBody    string
+		label     string
 		wantTitle string
 		wantBody  string
 	}{
@@ -130,6 +130,7 @@ func TestNormalizeSocialVideo(t *testing.T) {
 			name:      "instagram author only",
 			ogTitle:   "chef.eats on Instagram",
 			ogBody:    "3 cafes in Lisbon you must try",
+			label:     "Instagram reel",
 			wantTitle: "chef.eats on Instagram",
 			wantBody:  "3 cafes in Lisbon you must try",
 		},
@@ -137,6 +138,7 @@ func TestNormalizeSocialVideo(t *testing.T) {
 			name:    "instagram title embeds full caption",
 			ogTitle: "Vijay Rathod on Instagram: '" + longCaption + "'",
 			ogBody:  longCaption,
+			label:   "Instagram reel",
 			wantTitle: truncateRunes(
 				"Vijay Rathod: Hyderabad has a food scene like no other — and these 3 Telugu restaurants are rewriting the rulebook!",
 				socialVideoTitleMax,
@@ -147,6 +149,7 @@ func TestNormalizeSocialVideo(t *testing.T) {
 			name:      "caption only in title fills body",
 			ogTitle:   "Ada on Instagram: \"Best ramen in Shibuya tonight.\"",
 			ogBody:    "",
+			label:     "Instagram reel",
 			wantTitle: "Ada: Best ramen in Shibuya tonight.",
 			wantBody:  "Best ramen in Shibuya tonight.",
 		},
@@ -154,27 +157,46 @@ func TestNormalizeSocialVideo(t *testing.T) {
 			name:      "empty falls back to label",
 			ogTitle:   "",
 			ogBody:    "",
-			wantTitle: label,
+			label:     "Instagram reel",
+			wantTitle: "Instagram reel",
 			wantBody:  "",
 		},
 		{
-			name:      "tiktok caption title is capped",
+			name:      "long caption-only title is capped",
 			ogTitle:   strings.Repeat("yummy noodles ", 20),
 			ogBody:    "full caption kept",
+			label:     "TikTok video",
 			wantTitle: truncateRunes(strings.Repeat("yummy noodles ", 20), socialVideoTitleMax),
 			wantBody:  "full caption kept",
+		},
+		{
+			name:      "username containing TikTok stays Instagram",
+			ogTitle:   "TikTokFan on Instagram",
+			ogBody:    "a cafe in Lisbon",
+			label:     "Instagram reel",
+			wantTitle: "TikTokFan on Instagram",
+			wantBody:  "a cafe in Lisbon",
 		},
 		{
 			name:      "multiline caption uses first line as hook",
 			ogTitle:   "Sam on Instagram: 'Line one hook!\nLine two details'",
 			ogBody:    "Line one hook!\nLine two details",
+			label:     "Instagram reel",
 			wantTitle: "Sam: Line one hook!",
 			wantBody:  "Line one hook!\nLine two details",
+		},
+		{
+			name:      "tiktok author only uses label platform",
+			ogTitle:   "chef.eats on TikTok",
+			ogBody:    "street food tour",
+			label:     "TikTok video",
+			wantTitle: "chef.eats on TikTok",
+			wantBody:  "street food tour",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotTitle, gotBody := normalizeSocialVideo(tt.ogTitle, tt.ogBody, label)
+			gotTitle, gotBody := normalizeSocialVideo(tt.ogTitle, tt.ogBody, tt.label)
 			if gotTitle != tt.wantTitle {
 				t.Errorf("title = %q, want %q", gotTitle, tt.wantTitle)
 			}
