@@ -2,8 +2,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
 import { AccessibilityInfo, Animated, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import type { Item } from "@/lib/api";
+import { cardKind, typeLabel } from "@/lib/cards";
 import type { Settings } from "@/lib/settings";
 import { colors, fonts, radius, spacing, type, typeGradients, type CardKind } from "@/lib/theme";
+import { stripMarkdown } from "@/lib/text";
 
 /** Extract a bare host (no scheme, no www., no path) from a URL, or null. */
 function hostOf(url?: string): string | null {
@@ -12,38 +14,6 @@ function hostOf(url?: string): string | null {
   if (!match) return null;
   return match[1].replace(/^www\./i, "");
 }
-
-const KNOWN_KINDS: readonly CardKind[] = [
-  "article",
-  "quote",
-  "image",
-  "product",
-  "note",
-  "video",
-  "tweet",
-  "book",
-  "recipe",
-];
-
-/** Normalise a raw cardType into a known kind; unknown/absent → article. */
-function cardKind(cardType: string | undefined): CardKind {
-  if (cardType && (KNOWN_KINDS as readonly string[]).includes(cardType)) {
-    return cardType as CardKind;
-  }
-  return "article";
-}
-
-const typeLabel: Record<CardKind, string> = {
-  article: "Article",
-  quote: "Quote",
-  image: "Image",
-  product: "Product",
-  note: "Note",
-  video: "Video",
-  tweet: "Post",
-  book: "Book",
-  recipe: "Recipe",
-};
 
 /**
  * Resolve an item's leadImageUrl into an <Image> source. An instance-relative
@@ -138,29 +108,34 @@ type ItemCardProps = {
   item: Item;
   settings: Settings | null;
   onPress: (item: Item) => void;
+  /** Long-press to delete — omit to disable (e.g. on the feed screen). */
+  onLongPress?: (item: Item) => void;
 };
 
-export function ItemCard({ item, settings, onPress }: ItemCardProps) {
+export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps) {
   const kind = cardKind(item.cardType);
   const pending = item.status === "pending";
   const domain = hostOf(item.url);
   const dots = item.palette ?? [];
   const source = imageSource(item.leadImageUrl, settings);
-  const title = item.title?.trim() || domain || item.url || "Untitled";
+  const rawTitle = stripMarkdown(item.title?.trim());
+  const title = rawTitle || domain || item.url || "Untitled";
+  const summary = stripMarkdown(item.summary);
 
   const press = () => onPress(item);
   const wrap = (children: React.ReactNode) => (
     <Pressable
       style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
       onPress={press}
+      onLongPress={onLongPress ? () => onLongPress(item) : undefined}
     >
       {children}
     </Pressable>
   );
 
   if (kind === "quote") {
-    const text = item.summary ?? item.title ?? "";
-    const attribution = item.summary && item.title ? item.title : null;
+    const text = summary || rawTitle;
+    const attribution = summary && rawTitle ? rawTitle : null;
     return wrap(
       <View style={[styles.body, { backgroundColor: colors.ink, borderRadius: radius.card }]}>
         <Text style={styles.quoteGlyph}>&ldquo;</Text>
@@ -175,7 +150,7 @@ export function ItemCard({ item, settings, onPress }: ItemCardProps) {
   }
 
   if (kind === "note") {
-    const text = item.summary ?? item.title ?? "Untitled note";
+    const text = summary || rawTitle || "Untitled note";
     return wrap(
       <View style={[styles.body, { backgroundColor: colors.note, borderRadius: radius.card }]}>
         <Text style={styles.noteKicker}>NOTE</Text>
@@ -196,9 +171,9 @@ export function ItemCard({ item, settings, onPress }: ItemCardProps) {
       <View>
         <Hero kind={kind} dots={dots} source={source} height={180} />
         <View style={styles.body}>
-          {item.title ? (
+          {rawTitle ? (
             <Text style={styles.cardTitle} numberOfLines={2}>
-              {item.title}
+              {rawTitle}
             </Text>
           ) : null}
           <View style={styles.footerRow}>
@@ -219,9 +194,9 @@ export function ItemCard({ item, settings, onPress }: ItemCardProps) {
         <Text style={styles.cardTitle} numberOfLines={2}>
           {title}
         </Text>
-        {item.summary ? (
+        {summary ? (
           <Text style={styles.summary} numberOfLines={2}>
-            {item.summary}
+            {summary}
           </Text>
         ) : null}
         <View style={styles.footerRow}>

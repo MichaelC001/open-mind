@@ -2,9 +2,11 @@ import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
+  SectionList,
   StyleSheet,
   Text,
   TextInput,
@@ -12,10 +14,23 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ItemCard } from "@/components/ItemCard";
-import { listItems, searchItems, type Item, type UnderstoodQuery } from "@/lib/api";
+import { deleteItem, listItems, searchItems, type Item, type UnderstoodQuery } from "@/lib/api";
+import { cardKind, KNOWN_KINDS, typeLabelPlural } from "@/lib/cards";
 import { useCaptureQueue } from "@/lib/capture-queue-context";
 import { useSettingsContext } from "@/lib/settings-context";
-import { colors, fonts, radius, spacing } from "@/lib/theme";
+import { colors, fonts, radius, spacing, type CardKind } from "@/lib/theme";
+
+/** Group items by cardType, in a stable KNOWN_KINDS order, dropping empty groups. */
+function groupByKind(items: Item[]): { kind: CardKind; items: Item[] }[] {
+  const byKind = new Map<CardKind, Item[]>();
+  for (const item of items) {
+    const k = cardKind(item.cardType);
+    const list = byKind.get(k);
+    if (list) list.push(item);
+    else byKind.set(k, [item]);
+  }
+  return KNOWN_KINDS.filter((k) => byKind.has(k)).map((k) => ({ kind: k, items: byKind.get(k)! }));
+}
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -36,6 +51,7 @@ export default function LibraryScreen() {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
+  const [grouped, setGrouped] = useState(false);
   const requestSeq = useRef(0);
 
   useEffect(() => {
@@ -113,6 +129,28 @@ export default function LibraryScreen() {
     [router],
   );
 
+  const onDelete = useCallback((item: Item) => {
+    Alert.alert(`Delete "${item.title?.trim() || item.url}"?`, "This can't be undone.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            const res = await deleteItem(item.id);
+            if (res.ok) {
+              setState((s) =>
+                s.kind === "ready" ? { ...s, items: s.items.filter((i) => i.id !== item.id) } : s,
+              );
+            } else {
+              Alert.alert("Couldn't delete", "Please try again.");
+            }
+          })();
+        },
+      },
+    ]);
+  }, []);
+
   // Unconfigured guard: with no token stored, land on Settings.
   if (!loading && !configured) return <Redirect href="/settings" />;
 
@@ -123,7 +161,17 @@ export default function LibraryScreen() {
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <View style={styles.topHairline} />
       <View style={styles.header}>
-        <Text style={styles.title}>The Mind</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.title}>The Mind</Text>
+          {!searching ? (
+            <Pressable
+              style={({ pressed }) => [styles.groupToggle, pressed && styles.groupTogglePressed]}
+              onPress={() => setGrouped((g) => !g)}
+            >
+              <Text style={styles.groupToggleText}>{grouped ? "List" : "Group by type"}</Text>
+            </Pressable>
+          ) : null}
+        </View>
         <Text style={styles.subtitle}>
           {searching
             ? `${count} ${count === 1 ? "match" : "matches"}`
@@ -154,9 +202,11 @@ export default function LibraryScreen() {
         settings={settings}
         refreshing={refreshing}
         searching={searching}
+        grouped={grouped && !searching}
         onRefresh={() => void load(true, debouncedQuery)}
         onRetry={() => void load(false, debouncedQuery)}
         onOpen={onOpen}
+        onDelete={onDelete}
       />
     </SafeAreaView>
   );
@@ -186,12 +236,24 @@ type BodyProps = {
   settings: ReturnType<typeof useSettingsContext>["settings"];
   refreshing: boolean;
   searching: boolean;
+  grouped: boolean;
   onRefresh: () => void;
   onRetry: () => void;
   onOpen: (item: Item) => void;
+  onDelete: (item: Item) => void;
 };
 
-function Body({ state, settings, refreshing, searching, onRefresh, onRetry, onOpen }: BodyProps) {
+function Body({
+  state,
+  settings,
+  refreshing,
+  searching,
+  grouped,
+  onRefresh,
+  onRetry,
+  onOpen,
+  onDelete,
+}: BodyProps) {
   if (state.kind === "loading") {
     return (
       <View style={styles.centre}>
@@ -223,25 +285,49 @@ function Body({ state, settings, refreshing, searching, onRefresh, onRetry, onOp
     );
   }
 
+  const emptyMessage = (
+    <Message
+      text={searching ? "No matches — try a different fragment." : "Nothing saved yet — capture something."}
+    />
+  );
+  const refreshControl = (
+    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.cobalt} />
+  );
+
+  if (grouped) {
+    const sections = groupByKind(state.items).map(({ kind, items }) => ({
+      title: `${typeLabelPlural[kind]} · ${items.length}`,
+      data: items,
+    }));
+    return (
+      <SectionList
+        sections={sections}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onDelete} />
+        )}
+        renderSectionHeader={({ section }) => (
+          <Text style={styles.sectionHeader}>{section.title}</Text>
+        )}
+        contentContainerStyle={styles.list}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
+        refreshControl={refreshControl}
+        ListEmptyComponent={emptyMessage}
+      />
+    );
+  }
+
   return (
     <FlatList
       data={state.items}
       keyExtractor={(item) => item.id}
-      renderItem={({ item }) => <ItemCard item={item} settings={settings} onPress={onOpen} />}
+      renderItem={({ item }) => (
+        <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onDelete} />
+      )}
       contentContainerStyle={styles.list}
       ItemSeparatorComponent={() => <View style={styles.separator} />}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={colors.cobalt}
-        />
-      }
-      ListEmptyComponent={
-        <Message
-          text={searching ? "No matches — try a different fragment." : "Nothing saved yet — capture something."}
-        />
-      }
+      refreshControl={refreshControl}
+      ListEmptyComponent={emptyMessage}
     />
   );
 }
@@ -266,7 +352,28 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   topHairline: { height: 2, backgroundColor: colors.terracotta },
   header: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.md },
+  titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   title: { fontFamily: fonts.serifBold, fontSize: 27, color: colors.ink },
+  groupToggle: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    backgroundColor: colors.paper,
+  },
+  groupTogglePressed: { opacity: 0.7 },
+  groupToggleText: { fontFamily: fonts.mono, fontSize: 11, color: colors.inkMuted },
+  sectionHeader: {
+    fontFamily: fonts.monoMedium,
+    fontSize: 11,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: colors.inkFaint,
+    backgroundColor: colors.canvas,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+  },
   subtitle: {
     fontFamily: fonts.mono,
     fontSize: 12,

@@ -8,6 +8,7 @@ import { openBrowserAsync } from "expo-web-browser";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,32 +16,15 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { getItem, type ItemDetail } from "@/lib/api";
+import { deleteItem, getItem, setKept, type ItemDetail } from "@/lib/api";
+import { cardKind } from "@/lib/cards";
 import { colors, fonts, radius, spacing, typeGradients, type CardKind } from "@/lib/theme";
+import { stripMarkdown } from "@/lib/text";
 
 type State =
   | { kind: "loading" }
   | { kind: "ready"; item: ItemDetail }
   | { kind: "error"; message: string };
-
-const KNOWN_KINDS: readonly CardKind[] = [
-  "article",
-  "quote",
-  "image",
-  "product",
-  "note",
-  "video",
-  "tweet",
-  "book",
-  "recipe",
-];
-
-function cardKind(cardType: string | undefined): CardKind {
-  if (cardType && (KNOWN_KINDS as readonly string[]).includes(cardType)) {
-    return cardType as CardKind;
-  }
-  return "article";
-}
 
 /** Types that get a gradient hero wash on the detail screen. */
 const HERO_KINDS: readonly CardKind[] = ["article", "image", "product", "book", "recipe", "video", "tweet"];
@@ -70,6 +54,47 @@ export default function ItemScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [deleting, setDeleting] = useState(false);
+  const [keeping, setKeeping] = useState(false);
+
+  const onKeep = () => {
+    if (typeof id !== "string") return;
+    void (async () => {
+      setKeeping(true);
+      const res = await setKept(id, true);
+      setKeeping(false);
+      if (res.ok) {
+        setState((s) =>
+          s.kind === "ready" ? { kind: "ready", item: { ...s.item, keptAt: new Date().toISOString() } } : s,
+        );
+      } else {
+        Alert.alert("Couldn't keep", "Please try again.");
+      }
+    })();
+  };
+
+  const confirmDelete = () => {
+    if (typeof id !== "string") return;
+    Alert.alert("Delete this item?", "This can't be undone.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            setDeleting(true);
+            const res = await deleteItem(id);
+            setDeleting(false);
+            if (res.ok) {
+              router.back();
+            } else {
+              Alert.alert("Couldn't delete", "Please try again.");
+            }
+          })();
+        },
+      },
+    ]);
+  };
 
   useEffect(() => {
     if (typeof id !== "string") return;
@@ -99,6 +124,17 @@ export default function ItemScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12}>
           <Text style={styles.back}>‹ Back</Text>
         </Pressable>
+        {state.kind === "ready" ? (
+          state.item.keptAt ? (
+            <Pressable onPress={confirmDelete} hitSlop={12} disabled={deleting}>
+              <Text style={styles.deleteAction}>{deleting ? "Deleting…" : "Delete"}</Text>
+            </Pressable>
+          ) : (
+            <Pressable onPress={onKeep} hitSlop={12} disabled={keeping}>
+              <Text style={styles.keepAction}>{keeping ? "Keeping…" : "Keep"}</Text>
+            </Pressable>
+          )
+        ) : null}
       </View>
       <Body state={state} />
     </SafeAreaView>
@@ -127,9 +163,11 @@ function Body({ state }: { state: State }) {
   const dots = item.palette ?? [];
   const kicker = [item.cardType, host].filter(Boolean).join(" · ").toUpperCase();
   const tags = [...new Set([...(item.tags ?? []), ...(item.userTags ?? [])])];
+  const title = stripMarkdown(item.title);
+  const summary = stripMarkdown(item.summary);
   const paragraphs = (item.body ?? "")
     .split(/\n{2,}/)
-    .map((p) => p.trim())
+    .map((p) => stripMarkdown(p))
     .filter(Boolean);
 
   if (kind === "quote") {
@@ -138,10 +176,8 @@ function Body({ state }: { state: State }) {
         <View style={styles.quoteCard}>
           {kicker ? <Text style={styles.quoteKicker}>{kicker}</Text> : null}
           <Text style={styles.quoteGlyph}>&ldquo;</Text>
-          <Text style={styles.quoteText}>{item.summary || item.title || ""}</Text>
-          {item.title && item.summary ? (
-            <Text style={styles.quoteAttribution}>— {item.title}</Text>
-          ) : null}
+          <Text style={styles.quoteText}>{summary || title || ""}</Text>
+          {title && summary ? <Text style={styles.quoteAttribution}>— {title}</Text> : null}
           <PaletteDots dots={dots} />
         </View>
         {item.url ? <OpenOriginalPill url={item.url} /> : null}
@@ -162,8 +198,8 @@ function Body({ state }: { state: State }) {
       ) : null}
       {kicker ? <Text style={styles.kicker}>{kicker}</Text> : null}
       <PaletteDots dots={dots} />
-      <Text style={styles.title}>{item.title || host || "Untitled"}</Text>
-      {item.summary ? <Text style={styles.summary}>{item.summary}</Text> : null}
+      <Text style={styles.title}>{title || host || "Untitled"}</Text>
+      {summary ? <Text style={styles.summary}>{summary}</Text> : null}
       {item.url ? <OpenOriginalPill url={item.url} /> : null}
       {tags.length > 0 ? <TagsRow tags={tags} /> : null}
       {paragraphs.length > 0 ? (
@@ -205,8 +241,16 @@ function TagsRow({ tags }: { tags: string[] }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.paper },
-  topbar: { paddingHorizontal: spacing.xl, paddingVertical: spacing.md },
+  topbar: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+  },
   back: { color: colors.cobalt, fontFamily: fonts.sansSemiBold, fontSize: 15 },
+  deleteAction: { color: colors.danger, fontFamily: fonts.sansSemiBold, fontSize: 15 },
+  keepAction: { color: colors.cobalt, fontFamily: fonts.sansSemiBold, fontSize: 15 },
   container: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl },
   centre: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
   errorText: { fontFamily: fonts.sans, fontSize: 14, color: colors.inkMuted, textAlign: "center", lineHeight: 20 },

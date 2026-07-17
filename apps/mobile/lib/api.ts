@@ -268,6 +268,27 @@ export async function getItem(
   }
 }
 
+/**
+ * Delete an item via DELETE {instanceUrl}/api/items/{id}. Permanent — the
+ * server returns 204 on success.
+ */
+export async function deleteItem(
+  id: string,
+  override?: Settings,
+): Promise<{ ok: boolean; status: number }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0 };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/items/${id}`, {
+      method: "DELETE",
+      headers: authHeaders(settings.token),
+    });
+    return { ok: res.status === 204, status: res.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
+
 /** Subset of OpenAPI UnderstoodQuery — what parse=true returns alongside hits. */
 export type UnderstoodQuery = {
   text?: string;

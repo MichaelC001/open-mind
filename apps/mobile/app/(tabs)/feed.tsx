@@ -1,4 +1,4 @@
-import { Redirect, useFocusEffect } from "expo-router";
+import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { listFeedItems, setKept, type Item } from "@/lib/api";
 import { useSettingsContext } from "@/lib/settings-context";
 import { colors, fonts, radius, spacing } from "@/lib/theme";
+import { stripMarkdown } from "@/lib/text";
 
 type LoadState =
   | { kind: "loading" }
@@ -43,6 +44,7 @@ function relativeTime(iso: string | undefined): string {
 }
 
 export default function FeedScreen() {
+  const router = useRouter();
   const { settings, configured, loading } = useSettingsContext();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [refreshing, setRefreshing] = useState(false);
@@ -100,6 +102,13 @@ export default function FeedScreen() {
     });
   }, []);
 
+  const onOpen = useCallback(
+    (item: Item) => {
+      router.push(`/item/${item.id}`);
+    },
+    [router],
+  );
+
   // Unconfigured guard: with no token stored, land on Settings.
   if (!loading && !configured) return <Redirect href="/settings" />;
 
@@ -128,6 +137,7 @@ export default function FeedScreen() {
         onRefresh={() => void load(true)}
         onRetry={() => void load(false)}
         onToggleKeep={onToggleKeep}
+        onOpen={onOpen}
       />
     </SafeAreaView>
   );
@@ -140,9 +150,18 @@ type BodyProps = {
   onRefresh: () => void;
   onRetry: () => void;
   onToggleKeep: (item: Item) => void;
+  onOpen: (item: Item) => void;
 };
 
-function Body({ state, refreshing, pendingKeepIds, onRefresh, onRetry, onToggleKeep }: BodyProps) {
+function Body({
+  state,
+  refreshing,
+  pendingKeepIds,
+  onRefresh,
+  onRetry,
+  onToggleKeep,
+  onOpen,
+}: BodyProps) {
   if (state.kind === "loading") {
     return (
       <View style={styles.centre}>
@@ -175,6 +194,7 @@ function Body({ state, refreshing, pendingKeepIds, onRefresh, onRetry, onToggleK
           item={item}
           pending={pendingKeepIds.has(item.id)}
           onToggleKeep={() => onToggleKeep(item)}
+          onOpen={() => onOpen(item)}
         />
       )}
       contentContainerStyle={styles.list}
@@ -193,26 +213,29 @@ function FeedRow({
   item,
   pending,
   onToggleKeep,
+  onOpen,
 }: {
   item: Item;
   pending: boolean;
   onToggleKeep: () => void;
+  onOpen: () => void;
 }) {
   const kept = !!item.keptAt;
-  const title = item.title?.trim() || item.url || "Untitled";
+  const title = stripMarkdown(item.title?.trim()) || item.url || "Untitled";
+  const summary = stripMarkdown(item.summary);
   return (
     <View style={styles.row}>
-      <View style={styles.rowText}>
+      <Pressable style={styles.rowText} onPress={onOpen} hitSlop={4}>
         <Text style={styles.rowTitle} numberOfLines={2}>
           {title}
         </Text>
-        {item.summary ? (
+        {summary ? (
           <Text style={styles.rowSummary} numberOfLines={2}>
-            {item.summary}
+            {summary}
           </Text>
         ) : null}
         <Text style={styles.rowMeta}>{relativeTime(item.createdAt)}</Text>
-      </View>
+      </Pressable>
       <Pressable
         style={({ pressed }) => [
           styles.keepButton,
