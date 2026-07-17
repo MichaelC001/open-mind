@@ -20,6 +20,8 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Extract: fall back to first in-article `<img>` when `og:image` is
+  missing (simonwillison.net-style posts) (2026-07-17)
 - Reel places Phase 2: thumbnail vision (`ExtractPlacesVision` on Gemini,
   caption+vision merge by confidence) (2026-07-17)
 - Places map on web + mobile (GET /places, /places MapLibre page, item-rail

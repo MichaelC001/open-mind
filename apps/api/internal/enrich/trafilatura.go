@@ -52,6 +52,6 @@ func (t *Trafilatura) Extract(ctx context.Context, rawURL string) (Extraction, e
 	return Extraction{
 		Title:        result.Metadata.Title,
 		Body:         result.ContentText,
-		LeadImageURL: result.Metadata.Image,
+		LeadImageURL: pickLeadImageURL(result.Metadata.Image, result.ContentNode, parsed),
 	}, nil
 }

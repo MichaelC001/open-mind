@@ -52,6 +52,6 @@ func (r *Readability) Extract(ctx context.Context, rawURL string) (Extraction, e
 	return Extraction{
 		Title:        article.Title,
 		Body:         article.TextContent,
-		LeadImageURL: article.Image,
+		LeadImageURL: pickLeadImageURL(article.Image, article.Node, parsed),
 	}, nil
 }
