@@ -63,16 +63,27 @@ func (w *ExtractPlacesWorker) Work(ctx context.Context, job *river.Job[ExtractPl
 		return nil
 	}
 
-	var captionPlaces []ai.Place
+	// ran tracks whether any provider call succeeded (including an empty
+	// list). ErrNotSupported / fetch misses do not count — those leave any
+	// existing rows alone, matching Phase 1 noop behaviour. A successful
+	// empty extraction must still replace the place set so re-runs stay
+	// idempotent when the model finds nothing.
+	var captionPlaces, visionPlaces []ai.Place
+	ran := false
+
 	if hasText {
 		places, err := w.Provider.ExtractPlaces(ctx, item.Title, item.Body)
-		if err != nil && !errors.Is(err, ai.ErrNotSupported) {
+		switch {
+		case errors.Is(err, ai.ErrNotSupported):
+			// noop / text-incapable: leave captionPlaces empty
+		case err != nil:
 			return fmt.Errorf("extracting places: %w", err)
+		default:
+			captionPlaces = places
+			ran = true
 		}
-		captionPlaces = places
 	}
 
-	var visionPlaces []ai.Place
 	if hasImage {
 		data, _ := fetchLeadImage(ctx, w.HTTPClient, item.LeadImageUrl)
 		if len(data) > 0 {
@@ -88,15 +99,16 @@ func (w *ExtractPlacesWorker) Work(ctx context.Context, job *river.Job[ExtractPl
 					"item_id", item.ID, "err", err)
 			default:
 				visionPlaces = places
+				ran = true
 			}
 		}
 	}
 
-	merged := ai.MergePlacesWithSource(captionPlaces, visionPlaces)
-	if len(merged) == 0 {
+	if !ran {
 		return nil
 	}
 
+	merged := ai.MergePlacesWithSource(captionPlaces, visionPlaces)
 	rows := make([]db.InsertItemPlaceParams, 0, len(merged))
 	for _, p := range merged {
 		row := db.InsertItemPlaceParams{
@@ -126,7 +138,8 @@ func (w *ExtractPlacesWorker) Work(ctx context.Context, job *river.Job[ExtractPl
 	}
 
 	// Replace the item's place set atomically so a mid-write crash or retry
-	// can never leave a mix of old and new rows.
+	// can never leave a mix of old and new rows. An empty merged set clears
+	// prior rows (extraction ran and found nothing).
 	return pgx.BeginFunc(ctx, w.Store.Pool, func(tx pgx.Tx) error {
 		qtx := q.WithTx(tx)
 		if err := qtx.DeleteItemPlaces(ctx, db.DeleteItemPlacesParams{UserID: item.UserID, ItemID: item.ID}); err != nil {

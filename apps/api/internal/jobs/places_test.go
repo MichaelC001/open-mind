@@ -209,6 +209,28 @@ func TestExtractPlacesWorker(t *testing.T) {
 		}
 	})
 
+	t.Run("empty extraction clears prior places", func(t *testing.T) {
+		item := newPlacesTestItem(t, s, placesTestUser, "reel", "cafes in lisbon", "")
+		w := &jobs.ExtractPlacesWorker{Store: s, Provider: ai.NewFake()}
+		if err := runPlacesWorker(t, w, placesTestUser, item.ID); err != nil {
+			t.Fatal(err)
+		}
+		// Wipe caption so Fake returns nil; a successful empty extract must
+		// clear the rows written above (idempotent replace, not leave-stale).
+		if err := s.Queries.UpdateItemExtraction(ctx, db.UpdateItemExtractionParams{
+			UserID: placesTestUser, ID: item.ID, Title: "reel", Body: "", CardType: "video",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := runPlacesWorker(t, w, placesTestUser, item.ID); err != nil {
+			t.Fatal(err)
+		}
+		rows, _ := s.Queries.ListItemPlaces(ctx, db.ListItemPlacesParams{UserID: placesTestUser, ItemID: item.ID})
+		if len(rows) != 0 {
+			t.Errorf("empty extraction left %d stale places", len(rows))
+		}
+	})
+
 	t.Run("cross-tenant item is not visible", func(t *testing.T) {
 		otherUser := uuid.New()
 		if err := s.Queries.EnsureUser(ctx, otherUser); err != nil {
