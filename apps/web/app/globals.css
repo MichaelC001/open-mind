@@ -44,6 +44,21 @@ body{-webkit-font-smoothing:antialiased}
 
 @media (max-width:460px){.mind-col{column-count:1}}
 
+/* Responsive Shell sidebar. Desktop: display:contents keeps the aside a
+   direct flex child, byte-identical layout. Narrow screens: off-canvas
+   drawer toggled by the floating hamburger. */
+.shell-hamburger{display:none;position:fixed;z-index:60;left:14px;bottom:calc(14px + env(safe-area-inset-bottom))}
+.shell-overlay{position:fixed;inset:0;background:rgba(28,26,22,.35);z-index:49}
+.shell-aside{display:contents}
+@media (min-width:901px){.shell-overlay{display:none}}
+@media (max-width:900px){
+  .shell-hamburger{display:block}
+  .shell-aside{display:block;position:fixed;top:0;bottom:0;left:0;z-index:50;transform:translateX(-105%);transition:transform .22s ease;box-shadow:0 0 40px rgba(28,26,22,.35)}
+  .shell-aside-open{transform:translateX(0)}
+  .shell-aside aside{height:100%}
+}
+@media (prefers-reduced-motion:reduce){.shell-aside{transition:none}}
+
 /* Faint horizontal-rule paper texture; overlay behind card content. */
 .paper-texture{background:repeating-linear-gradient(#00000000 0 31px,rgba(28,26,22,.028) 31px 32px)}
 
