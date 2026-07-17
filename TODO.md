@@ -20,11 +20,19 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+<<<<<<< HEAD
 - Reel/social-video titles: peel Instagram/TikTok OG caption dumps into a
   short "Author: hook" title (caption stays in body); clamp detail/card
   titles to 3 lines on web + mobile for already-saved items (2026-07-17)
+=======
+<<<<<<< HEAD
+>>>>>>> 85a9663 (Add back and current-location controls to places maps)
 - Extract: fall back to first in-article `<img>` when `og:image` is
   missing (simonwillison.net-style posts) (2026-07-17)
+=======
+- Places map controls: mobile back + current-location FABs (expo-location);
+  web MapLibre GeolocateControl (2026-07-17)
+>>>>>>> c49104d (Add back and current-location controls to places maps)
 - Reel places Phase 2: thumbnail vision (`ExtractPlacesVision` on Gemini,
   caption+vision merge by confidence) (2026-07-17)
 - Places map on web + mobile (GET /places, /places MapLibre page, item-rail

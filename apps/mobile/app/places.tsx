@@ -1,10 +1,12 @@
 // Stack screen: every place the pipeline has extracted, plotted on a map with
 // coordinate-less places listed below (opened via a Google Maps search URL).
 import { useQuery } from "@tanstack/react-query";
+import * as Location from "expo-location";
 import { Stack, useRouter } from "expo-router";
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Pressable,
   ScrollView,
@@ -13,7 +15,7 @@ import {
   View,
 } from "react-native";
 import MapView, { Marker, type Region } from "react-native-maps";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { ApiError, listPlaces, type PlaceWithItem } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 import { colors, fonts, radius, spacing } from "@/lib/theme";
@@ -24,6 +26,8 @@ const WORLD_REGION: Region = {
   latitudeDelta: 90,
   longitudeDelta: 90,
 };
+
+const NEAR_ME_DELTA = 0.05;
 
 function hasCoords(p: PlaceWithItem): p is PlaceWithItem & { lat: number; lng: number } {
   return typeof p.lat === "number" && typeof p.lng === "number";
@@ -58,7 +62,7 @@ export default function PlacesScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["left", "right", "bottom"]}>
-      <Stack.Screen options={{ title: "Places" }} />
+      <Stack.Screen options={{ headerShown: false }} />
       <Body
         isPending={placesQuery.isPending && !placesQuery.data}
         isError={placesQuery.isError}
@@ -68,6 +72,7 @@ export default function PlacesScreen() {
         initialRegion={initialRegion}
         onRetry={() => void placesQuery.refetch()}
         onOpenItem={(id) => router.push(`/item/${id}`)}
+        onBack={() => router.back()}
       />
     </SafeAreaView>
   );
@@ -82,6 +87,7 @@ function Body({
   initialRegion,
   onRetry,
   onOpenItem,
+  onBack,
 }: {
   isPending: boolean;
   isError: boolean;
@@ -91,11 +97,15 @@ function Body({
   initialRegion: Region;
   onRetry: () => void;
   onOpenItem: (id: string) => void;
+  onBack: () => void;
 }) {
   if (isPending) {
     return (
-      <View style={styles.centre}>
-        <ActivityIndicator color={colors.cobalt} />
+      <View style={styles.flex}>
+        <TopBar onBack={onBack} />
+        <View style={styles.centre}>
+          <ActivityIndicator color={colors.cobalt} />
+        </View>
       </View>
     );
   }
@@ -107,26 +117,126 @@ function Body({
         : errStatus === 401
           ? "Token rejected — check Settings."
           : "Couldn't load your places.";
-    return <Message text={text} onRetry={onRetry} />;
+    return (
+      <View style={styles.flex}>
+        <TopBar onBack={onBack} />
+        <Message text={text} onRetry={onRetry} />
+      </View>
+    );
   }
 
   if (pinned.length === 0 && unpinned.length === 0) {
-    return <Message text="No places saved yet — capture something with a location." />;
+    return (
+      <View style={styles.flex}>
+        <TopBar onBack={onBack} />
+        <Message text="No places saved yet — capture something with a location." />
+      </View>
+    );
+  }
+
+  return (
+    <MapBody
+      pinned={pinned}
+      unpinned={unpinned}
+      initialRegion={initialRegion}
+      onOpenItem={onOpenItem}
+      onBack={onBack}
+    />
+  );
+}
+
+function TopBar({ onBack }: { onBack: () => void }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={[styles.topbar, { paddingTop: insets.top + spacing.sm }]}>
+      <Pressable onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back">
+        <Text style={styles.back}>‹ Back</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function MapBody({
+  pinned,
+  unpinned,
+  initialRegion,
+  onOpenItem,
+  onBack,
+}: {
+  pinned: (PlaceWithItem & { lat: number; lng: number })[];
+  unpinned: PlaceWithItem[];
+  initialRegion: Region;
+  onOpenItem: (id: string) => void;
+  onBack: () => void;
+}) {
+  const mapRef = useRef<MapView>(null);
+  const insets = useSafeAreaInsets();
+  const [locating, setLocating] = useState(false);
+
+  async function goToMyLocation() {
+    setLocating(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Location needed", "Allow location access to centre the map on you.");
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      mapRef.current?.animateToRegion({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        latitudeDelta: NEAR_ME_DELTA,
+        longitudeDelta: NEAR_ME_DELTA,
+      });
+    } catch {
+      Alert.alert("Couldn't find you", "Try again in a moment.");
+    } finally {
+      setLocating(false);
+    }
   }
 
   return (
     <View style={styles.flex}>
-      <MapView style={styles.map} initialRegion={initialRegion}>
-        {pinned.map((p) => (
-          <Marker
-            key={p.id}
-            coordinate={{ latitude: p.lat, longitude: p.lng }}
-            title={p.name}
-            description={p.itemTitle}
-            onCalloutPress={() => onOpenItem(p.itemId)}
-          />
-        ))}
-      </MapView>
+      <View style={styles.mapWrap}>
+        <MapView
+          ref={mapRef}
+          style={styles.map}
+          initialRegion={initialRegion}
+          showsUserLocation
+          showsMyLocationButton={false}
+        >
+          {pinned.map((p) => (
+            <Marker
+              key={p.id}
+              coordinate={{ latitude: p.lat, longitude: p.lng }}
+              title={p.name}
+              description={p.itemTitle}
+              onCalloutPress={() => onOpenItem(p.itemId)}
+            />
+          ))}
+        </MapView>
+        <Pressable
+          style={[styles.backFab, { top: insets.top + spacing.sm }]}
+          onPress={onBack}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
+          <Text style={styles.backFabText}>‹ Back</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.locateFab, locating && styles.locateFabBusy]}
+          onPress={() => void goToMyLocation()}
+          disabled={locating}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Current location"
+        >
+          <Text style={styles.locateFabText}>{locating ? "…" : "⌖"}</Text>
+        </Pressable>
+      </View>
       {unpinned.length > 0 ? (
         <ScrollView style={styles.unpinnedList} contentContainerStyle={styles.unpinnedContent}>
           <Text style={styles.sectionHeader}>Without coordinates · {unpinned.length}</Text>
@@ -171,7 +281,40 @@ function Message({ text, onRetry }: { text: string; onRetry?: () => void }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   flex: { flex: 1 },
-  map: { flex: 1 },
+  mapWrap: { flex: 1 },
+  map: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
+  topbar: {
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.sm,
+    backgroundColor: colors.paper,
+  },
+  back: { color: colors.cobalt, fontFamily: fonts.sansSemiBold, fontSize: 15 },
+  backFab: {
+    position: "absolute",
+    left: spacing.lg,
+    backgroundColor: colors.cardSurface,
+    borderRadius: radius.button,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  backFabText: { color: colors.cobalt, fontFamily: fonts.sansSemiBold, fontSize: 15 },
+  locateFab: {
+    position: "absolute",
+    right: spacing.lg,
+    bottom: spacing.lg,
+    width: 44,
+    height: 44,
+    borderRadius: radius.button,
+    backgroundColor: colors.cardSurface,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  locateFabBusy: { opacity: 0.6 },
+  locateFabText: { color: colors.cobalt, fontFamily: fonts.sansSemiBold, fontSize: 20, lineHeight: 24 },
   centre: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
   messageText: {
     fontFamily: fonts.sans,
