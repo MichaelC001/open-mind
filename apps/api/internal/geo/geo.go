@@ -40,6 +40,9 @@ type Geocoder interface {
 // GEOCODER=nominatim enables OSM Nominatim. NOMINATIM_URL points at a
 // self-hosted instance (default: the public endpoint, whose usage policy
 // requires an identifying contact — set NOMINATIM_EMAIL).
+//
+// GEOCODER=google enables Google Places Text Search (better POI coverage,
+// requires GOOGLE_PLACES_API_KEY with the Places API (New) enabled).
 func FromEnv() (Geocoder, error) {
 	switch os.Getenv("GEOCODER") {
 	case "", "none":
@@ -50,8 +53,14 @@ func FromEnv() (Geocoder, error) {
 			base = "https://nominatim.openstreetmap.org"
 		}
 		return NewNominatim(base, os.Getenv("NOMINATIM_EMAIL"), nil), nil
+	case "google":
+		key := os.Getenv("GOOGLE_PLACES_API_KEY")
+		if key == "" {
+			return nil, fmt.Errorf("geo: GEOCODER=google requires GOOGLE_PLACES_API_KEY")
+		}
+		return NewGooglePlaces(key, nil), nil
 	default:
-		return nil, fmt.Errorf("geo: unknown GEOCODER %q (want nominatim)", os.Getenv("GEOCODER"))
+		return nil, fmt.Errorf("geo: unknown GEOCODER %q (want nominatim or google)", os.Getenv("GEOCODER"))
 	}
 }
 
