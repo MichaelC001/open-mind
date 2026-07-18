@@ -208,8 +208,19 @@ function Rail({ item, places }: { item: ItemDetail; places: Place[] }) {
         Palette
       </div>
       <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap" }}>
-        <Palette colors={colors} size={24} />
+        <Palette colors={colors} size={24} colorLinks />
       </div>
+      <p
+        style={{
+          fontFamily: font.sans,
+          fontSize: 11,
+          lineHeight: 1.4,
+          color: color.inkFaint,
+          margin: "8px 0 0",
+        }}
+      >
+        Tap a colour to find matches.
+      </p>
       {tags.length > 0 ? (
         <>
           {divider}

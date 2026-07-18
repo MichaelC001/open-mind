@@ -60,7 +60,7 @@ function Footer({
 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 11 }}>
-      <Palette colors={dots} />
+      <Palette colors={dots} colorLinks />
       <span
         className="meta"
         style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, ...(metaColor ? { color: metaColor } : {}) }}
@@ -221,7 +221,7 @@ export function ItemCard({ item }: { item: Item }) {
             {attribution ? `${attribution} — Quote` : "Quote"}
           </div>
           <div style={{ display: "flex", gap: 5, marginTop: 12 }}>
-            <Palette colors={dots} />
+            <Palette colors={dots} colorLinks />
           </div>
           {pending ? <Enriching /> : null}
         </div>
@@ -241,7 +241,7 @@ export function ItemCard({ item }: { item: Item }) {
           caption={item.title ?? undefined}
         />
         <div style={{ padding: "11px 13px", display: "flex", alignItems: "center", gap: 8 }}>
-          <Palette colors={dots} />
+          <Palette colors={dots} colorLinks />
           <span className="meta" style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
             {item.feedId ? <FeedBadge /> : null}
             {withDomain("Image")}
@@ -268,7 +268,7 @@ export function ItemCard({ item }: { item: Item }) {
           </div>
           <Tags tags={unionTags(item.tags, item.userTags)} />
           <div style={{ display: "flex", gap: 5, marginTop: 12 }}>
-            <Palette colors={dots} />
+            <Palette colors={dots} colorLinks />
           </div>
           {pending ? <Enriching /> : null}
         </div>

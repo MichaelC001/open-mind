@@ -91,7 +91,7 @@ export default async function Page({
               <ImageDrop />
             </div>
           </div>
-          <Grid items={items} />
+          <Grid items={items} colorActive={Boolean(color)} />
         </div>
       </div>
     </Shell>

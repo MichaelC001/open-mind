@@ -49,6 +49,7 @@ export default function LibraryScreen() {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [grouped, setGrouped] = useState(false);
+  const [colorFilter, setColorFilter] = useState<string | null>(null);
   const pinItem = usePinItem();
   const deleteItem = useDeleteItem();
   const { present, node: actionSheet } = useAndroidActionSheet();
@@ -59,22 +60,32 @@ export default function LibraryScreen() {
   }, [query]);
 
   const searching = debouncedQuery.length > 0;
+  const filteringByColor = !searching && !!colorFilter;
 
   const listQuery = useQuery({
-    queryKey: searching ? queryKeys.search(debouncedQuery) : queryKeys.items(LIST_LIMIT),
+    queryKey: searching
+      ? queryKeys.search(debouncedQuery)
+      : filteringByColor
+        ? queryKeys.search(`color:${colorFilter}`)
+        : queryKeys.items(LIST_LIMIT),
     enabled: !!settings && configured,
     queryFn: async (): Promise<LibraryData> => {
-      if (!searching) {
-        const res = await listItems(LIST_LIMIT);
+      if (searching) {
+        const res = await searchItems({ q: debouncedQuery, parse: true });
         if (!res.ok) throw new ApiError(res.status);
-        return { items: res.items };
+        return {
+          items: res.results.map((r) => r.item),
+          understood: res.understood,
+        };
       }
-      const res = await searchItems({ q: debouncedQuery, parse: true });
+      if (filteringByColor) {
+        const res = await searchItems({ color: colorFilter });
+        if (!res.ok) throw new ApiError(res.status);
+        return { items: res.results.map((r) => r.item) };
+      }
+      const res = await listItems(LIST_LIMIT);
       if (!res.ok) throw new ApiError(res.status);
-      return {
-        items: res.results.map((r) => r.item),
-        understood: res.understood,
-      };
+      return { items: res.items };
     },
     // Keep prior results visible while a new search key loads.
     placeholderData: (prev) => prev,
@@ -123,7 +134,7 @@ export default function LibraryScreen() {
             <Pressable onPress={() => router.push("/places")} hitSlop={8}>
               <Text style={styles.mapAction}>⌖ Map</Text>
             </Pressable>
-            {!searching ? (
+            {!searching && !filteringByColor ? (
               <Pressable
                 style={({ pressed }) => [styles.groupToggle, pressed && styles.groupTogglePressed]}
                 onPress={() => setGrouped((g) => !g)}
@@ -134,7 +145,7 @@ export default function LibraryScreen() {
           </View>
         </View>
         <Text style={styles.subtitle}>
-          {searching
+          {searching || filteringByColor
             ? `${count} ${count === 1 ? "match" : "matches"}`
             : `${count} ${count === 1 ? "gathering" : "gatherings"} · organised by the machine`}
           {pendingCount > 0 ? ` · ${pendingCount} queued` : ""}
@@ -143,7 +154,10 @@ export default function LibraryScreen() {
           <TextInput
             style={[styles.searchInput, searchFocused && styles.searchInputFocused]}
             value={query}
-            onChangeText={setQuery}
+            onChangeText={(t) => {
+              setQuery(t);
+              if (colorFilter) setColorFilter(null);
+            }}
             onFocus={() => setSearchFocused(true)}
             onBlur={() => setSearchFocused(false)}
             placeholder="Search by fragment, vibe, colour…"
@@ -157,20 +171,38 @@ export default function LibraryScreen() {
         {listQuery.data?.understood ? (
           <UnderstoodRow understood={listQuery.data.understood} q={debouncedQuery} />
         ) : null}
+        {colorFilter ? (
+          <View style={styles.colorChip}>
+            <View style={[styles.colorChipSwatch, { backgroundColor: colorFilter }]} />
+            <Text style={styles.colorChipText}>Colour</Text>
+            <Pressable
+              onPress={() => setColorFilter(null)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Clear colour filter"
+            >
+              <Text style={styles.colorChipClear}>×</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
       <Body
         isPending={listQuery.isPending && !listQuery.data}
         isError={listQuery.isError}
         errStatus={errStatus}
-        searching={searching}
+        searching={searching || filteringByColor}
         items={items}
         settings={settings}
         refreshing={listQuery.isRefetching && !listQuery.isPending}
-        grouped={grouped && !searching}
+        grouped={grouped && !searching && !filteringByColor}
         onRefresh={() => void listQuery.refetch()}
         onRetry={() => void listQuery.refetch()}
         onOpen={onOpen}
         onLongPress={onLongPress}
+        onPickColor={(hex) => {
+          setColorFilter(hex);
+          setQuery("");
+        }}
       />
     </SafeAreaView>
   );
@@ -208,6 +240,7 @@ type BodyProps = {
   onRetry: () => void;
   onOpen: (item: Item) => void;
   onLongPress: (item: Item) => void;
+  onPickColor: (hex: string) => void;
 };
 
 function Body({
@@ -223,6 +256,7 @@ function Body({
   onRetry,
   onOpen,
   onLongPress,
+  onPickColor,
 }: BodyProps) {
   if (isPending) {
     return (
@@ -275,7 +309,7 @@ function Body({
         sections={sections}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onLongPress} />
+          <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onLongPress} onPickColor={onPickColor} />
         )}
         renderSectionHeader={({ section }) => (
           <Text style={styles.sectionHeader}>{section.title}</Text>
@@ -293,7 +327,7 @@ function Body({
       data={items}
       keyExtractor={(item) => item.id}
       renderItem={({ item }) => (
-        <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onLongPress} />
+        <ItemCard item={item} settings={settings} onPress={onOpen} onLongPress={onLongPress} onPickColor={onPickColor} />
       )}
       contentContainerStyle={styles.list}
       ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -394,6 +428,28 @@ const styles = StyleSheet.create({
     backgroundColor: colors.paper,
   },
   chipText: { fontFamily: fonts.mono, fontSize: 11, color: colors.inkMuted },
+  colorChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    backgroundColor: colors.paper,
+  },
+  colorChipSwatch: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  colorChipText: { fontFamily: fonts.mono, fontSize: 11, color: colors.inkMuted },
+  colorChipClear: { fontFamily: fonts.sans, fontSize: 15, color: colors.inkFaint, lineHeight: 16 },
   list: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl, flexGrow: 1 },
   separator: { height: 14 },
   centre: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },

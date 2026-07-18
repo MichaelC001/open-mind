@@ -3,7 +3,7 @@ import { tokens } from "@openmind/ui";
 import type { Item } from "../lib/types";
 import { ItemCard } from "./ItemCard";
 
-export function Grid({ items }: { items: Item[] }) {
+export function Grid({ items, colorActive }: { items: Item[]; colorActive?: boolean }) {
   if (items.length === 0) {
     return (
       <p
@@ -15,7 +15,9 @@ export function Grid({ items }: { items: Item[] }) {
           marginTop: "2rem",
         }}
       >
-        Nothing gathered yet — drop a link or a thought above.
+        {colorActive
+          ? "No saves match that colour yet — colours come from each save's palette, so try a warmer or cooler shade."
+          : "Nothing gathered yet — drop a link or a thought above."}
       </p>
     );
   }
@@ -23,11 +25,7 @@ export function Grid({ items }: { items: Item[] }) {
   return (
     <div className="mind-col">
       {items.map((item) => (
-        <Link
-          key={item.id}
-          href={`/item/${item.id}`}
-          style={{ display: "block", position: "relative", color: "inherit", textDecoration: "none" }}
-        >
+        <article key={item.id} className="card-wrap">
           {item.pinnedAt ? (
             <span
               aria-label="On desk"
@@ -42,11 +40,18 @@ export function Grid({ items }: { items: Item[] }) {
                 borderRadius: "50%",
                 background: tokens.color.gold,
                 boxShadow: `0 0 0 2px ${tokens.color.cardSurface}`,
+                pointerEvents: "none",
               }}
             />
           ) : null}
           <ItemCard item={item} />
-        </Link>
+          <Link
+            href={`/item/${item.id}`}
+            aria-label={item.title ?? "Open item"}
+            className="card-link"
+            style={{ color: "inherit", textDecoration: "none" }}
+          />
+        </article>
       ))}
     </div>
   );
