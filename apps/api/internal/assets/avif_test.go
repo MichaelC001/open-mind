@@ -3,6 +3,7 @@ package assets
 import (
 	"bytes"
 	"encoding/binary"
+	"strings"
 	"testing"
 )
 
@@ -680,4 +681,126 @@ func TestStripAVIF_Malformed(t *testing.T) {
 			}
 		}()
 	})
+}
+
+// replaceMetaChild rebuilds data with the meta box's child currently spanning
+// [childStart, childStart+origSize) replaced by newChild, and meta's own size
+// field adjusted to match. childStart/origSize must fall within the top-level
+// meta box's byte range.
+func replaceMetaChild(t *testing.T, data []byte, childStart, origSize int, newChild []byte) []byte {
+	t.Helper()
+
+	metaIdx := bytes.Index(data, []byte("meta"))
+	if metaIdx < 0 {
+		t.Fatalf("fixture has no meta box")
+	}
+	metaSizePos := metaIdx - 4
+	origMetaSize := int(binary.BigEndian.Uint32(data[metaSizePos : metaSizePos+4]))
+	newMetaSize := origMetaSize - origSize + len(newChild)
+
+	out := make([]byte, 0, len(data)-origSize+len(newChild))
+	out = append(out, data[:metaSizePos]...)
+	out = append(out, be32(uint32(newMetaSize))...)
+	out = append(out, data[metaSizePos+4:childStart]...)
+	out = append(out, newChild...)
+	out = append(out, data[childStart+origSize:]...)
+	return out
+}
+
+// TestStripAVIF_HostileItemCount covers the DoS fix in parseIloc: a hostile
+// iloc box (version 2, so item_count is 32-bit) that declares item_count =
+// 0xFFFFFFFF while carrying none of the ~171GB of bytes such a count would
+// require. Before the item_count guard, make([]ilocItem, 0, itemCount) ran
+// before any per-item bounds check, so this input would trigger a fatal
+// (unrecoverable) runtime out-of-memory on strict-overcommit hosts rather
+// than a clean error — stripAVIF's deferred recover() cannot catch a fatal
+// OOM. This must return an error, not panic and not OOM.
+func TestStripAVIF_HostileItemCount(t *testing.T) {
+	data := buildAVIF(t, []testItem{
+		{id: 1, itemType: "av01", data: []byte("fake-av1-bitstream-payload")},
+		{id: 2, itemType: "Exif", data: []byte{0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08}},
+	})
+
+	ilocIdx := bytes.Index(data, []byte("iloc"))
+	if ilocIdx < 0 {
+		t.Fatalf("fixture has no iloc box")
+	}
+	ilocStart := ilocIdx - 4
+	origIlocSize := int(binary.BigEndian.Uint32(data[ilocStart : ilocStart+4]))
+
+	// version 2 (32-bit item_count), offset_size=4, length_size=4,
+	// base_offset_size=0, index_size=0, item_count=0xFFFFFFFF: about 18 bytes
+	// on the wire, declaring four billion items.
+	hostileRest := append([]byte{0x44, 0x00}, be32(0xFFFFFFFF)...)
+	hostileIloc := mkBox("iloc", fullBoxBody(2, hostileRest))
+
+	mutated := replaceMetaChild(t, data, ilocStart, origIlocSize, hostileIloc)
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("stripAVIF panicked on hostile iloc item_count: %v", r)
+			}
+		}()
+		out, err := stripAVIF(mutated)
+		if err == nil {
+			t.Fatalf("expected error on hostile iloc item_count, got success (out len %d)", len(out))
+		}
+		// Assert the item_count guard specifically fired (rather than some
+		// unrelated later truncation error), so this test actually exercises
+		// the pre-allocation bounds check and not just "some error happened".
+		if !strings.Contains(err.Error(), "item_count") || !strings.Contains(err.Error(), "exceeds box size") {
+			t.Errorf("expected an item_count-exceeds-box-size error, got: %v", err)
+		}
+	}()
+}
+
+// TestStripAVIF_HostileExtentCount is the same defense-in-depth guard applied
+// to the per-item extent_count allocation: a single iloc item declaring
+// extent_count = 0xFFFF (its max, extent_count being 16-bit) while the box
+// carries none of the extent bytes such a count would require. extent_count
+// being only 16-bit makes this a much smaller allocation than the item_count
+// case, but the guard still fails closed before allocating rather than
+// relying on the per-field bounds checks inside the extent loop.
+func TestStripAVIF_HostileExtentCount(t *testing.T) {
+	data := buildAVIF(t, []testItem{
+		{id: 1, itemType: "av01", data: []byte("fake-av1-bitstream-payload")},
+		{id: 2, itemType: "Exif", data: []byte{0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08}},
+	})
+
+	ilocIdx := bytes.Index(data, []byte("iloc"))
+	if ilocIdx < 0 {
+		t.Fatalf("fixture has no iloc box")
+	}
+	ilocStart := ilocIdx - 4
+	origIlocSize := int(binary.BigEndian.Uint32(data[ilocStart : ilocStart+4]))
+
+	// version 0 (16-bit item_count/item_ID), offset_size=4, length_size=4,
+	// base_offset_size=0, index_size=0, one item declaring extent_count =
+	// 0xFFFF while carrying zero extents.
+	hostileRest := []byte{0x44, 0x00}                  // sizes byte0/byte1
+	hostileRest = append(hostileRest, be16(1)...)      // item_count = 1
+	hostileRest = append(hostileRest, be16(1)...)      // item_ID
+	hostileRest = append(hostileRest, be16(0)...)      // data_reference_index
+	hostileRest = append(hostileRest, be16(0xFFFF)...) // extent_count = 0xFFFF
+	hostileIloc := mkBox("iloc", fullBoxBody(0, hostileRest))
+
+	mutated := replaceMetaChild(t, data, ilocStart, origIlocSize, hostileIloc)
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("stripAVIF panicked on hostile iloc extent_count: %v", r)
+			}
+		}()
+		out, err := stripAVIF(mutated)
+		if err == nil {
+			t.Fatalf("expected error on hostile iloc extent_count, got success (out len %d)", len(out))
+		}
+		// Assert the extent_count guard specifically fired, not some other
+		// truncation error further down the parse.
+		if !strings.Contains(err.Error(), "extent_count") || !strings.Contains(err.Error(), "exceeds box size") {
+			t.Errorf("expected an extent_count-exceeds-box-size error, got: %v", err)
+		}
+	}()
 }

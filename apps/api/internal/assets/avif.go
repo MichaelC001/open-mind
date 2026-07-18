@@ -403,6 +403,28 @@ func parseIloc(data []byte, b box) (*ilocBox, error) {
 		return nil, fmt.Errorf("iloc: unsupported version %d", version)
 	}
 
+	// Bound item_count against the box's remaining bytes before reserving
+	// capacity for it: item_count is attacker-controlled (32 bits wide for
+	// version 2, up to 0xFFFFFFFF), and make([]ilocItem, 0, itemCount) below
+	// would otherwise allocate on that count before any per-item bounds check
+	// runs, letting a tiny hostile box request hundreds of gigabytes. Every
+	// item needs at least: item_ID (2 or 4 bytes) + construction_method (2
+	// bytes, versions 1/2 only) + data_reference_index (2 bytes) +
+	// base_offset (baseOffsetSize bytes) + extent_count (2 bytes).
+	minItemBytes := 2 + 2 // data_reference_index + extent_count
+	if version < 2 {
+		minItemBytes += 2 // item_ID (16-bit)
+	} else {
+		minItemBytes += 4 // item_ID (32-bit)
+	}
+	if version == 1 || version == 2 {
+		minItemBytes += 2 // construction_method
+	}
+	minItemBytes += baseOffsetSize
+	if itemCount > (boxEnd-pos)/minItemBytes {
+		return nil, fmt.Errorf("iloc: item_count %d exceeds box size", itemCount)
+	}
+
 	items := make([]ilocItem, 0, itemCount)
 	for i := 0; i < itemCount; i++ {
 		var id uint32
@@ -446,6 +468,19 @@ func parseIloc(data []byte, b box) (*ilocBox, error) {
 		}
 		extentCount := int(binary.BigEndian.Uint16(data[pos : pos+2]))
 		pos += 2
+
+		// Same reasoning as the item_count guard above: bound extent_count
+		// against the box's remaining bytes before reserving capacity for it.
+		// extent_count is only 16 bits so this isn't independently a GB-scale
+		// vector, but it fails closed before allocating instead of relying on
+		// the per-field bounds checks in the loop below to catch it late.
+		minExtentBytes := offsetSize + lengthSize
+		if (version == 1 || version == 2) && indexSize > 0 {
+			minExtentBytes += indexSize
+		}
+		if extentCount > (boxEnd-pos)/minExtentBytes {
+			return nil, fmt.Errorf("iloc: extent_count %d exceeds box size", extentCount)
+		}
 
 		extents := make([]ilocExtent, 0, extentCount)
 		for j := 0; j < extentCount; j++ {
