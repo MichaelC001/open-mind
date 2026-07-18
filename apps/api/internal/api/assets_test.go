@@ -199,7 +199,7 @@ func jpegWithExif(t *testing.T) []byte {
 	return out
 }
 
-// --- minimal AVIF fixture builder ---
+// Minimal AVIF fixture builder for these handler tests.
 //
 // internal/assets/avif_test.go already has a general-purpose buildAVIF, but
 // it lives in a _test.go file so it isn't importable from this package
