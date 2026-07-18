@@ -40,6 +40,7 @@ export function Grid({ items, colorActive }: { items: Item[]; colorActive?: bool
                 borderRadius: "50%",
                 background: tokens.color.gold,
                 boxShadow: `0 0 0 2px ${tokens.color.cardSurface}`,
+                pointerEvents: "none",
               }}
             />
           ) : null}
