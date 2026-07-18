@@ -36,13 +36,24 @@ function imageSource(
 }
 
 /** Palette dots — the signature brand detail. Max 5, 9px, inset hairline ring. */
-function PaletteDots({ dots }: { dots: string[] }) {
+function PaletteDots({ dots, onPickColor }: { dots: string[]; onPickColor?: (hex: string) => void }) {
   if (dots.length === 0) return null;
   return (
     <View style={styles.dotsRow}>
-      {dots.slice(0, 5).map((c, i) => (
-        <View key={`${c}-${i}`} style={[styles.dot, { backgroundColor: c }]} />
-      ))}
+      {dots.slice(0, 5).map((c, i) =>
+        onPickColor ? (
+          <Pressable
+            key={`${c}-${i}`}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={`Find saves matching ${c}`}
+            onPress={() => onPickColor(c)}
+            style={[styles.dot, { backgroundColor: c }]}
+          />
+        ) : (
+          <View key={`${c}-${i}`} style={[styles.dot, { backgroundColor: c }]} />
+        ),
+      )}
     </View>
   );
 }
@@ -110,9 +121,11 @@ type ItemCardProps = {
   onPress: (item: Item) => void;
   /** Long-press for the action sheet — omit to disable. */
   onLongPress?: (item: Item) => void;
+  /** Tapping a palette dot filters the Library by that colour — omit to disable. */
+  onPickColor?: (hex: string) => void;
 };
 
-export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps) {
+export function ItemCard({ item, settings, onPress, onLongPress, onPickColor }: ItemCardProps) {
   const kind = cardKind(item.cardType);
   const pending = item.status === "pending";
   const pinned = !!item.pinnedAt;
@@ -150,7 +163,7 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
           {text}
         </Text>
         <Text style={styles.quoteAttribution}>{attribution ? `${attribution} — Quote` : "Quote"}</Text>
-        <PaletteDots dots={dots} />
+        <PaletteDots dots={dots} onPickColor={onPickColor} />
         {pending ? <EnrichingLabel /> : null}
       </View>,
     );
@@ -165,7 +178,7 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
           {text}
         </Text>
         <View style={styles.footerRow}>
-          <PaletteDots dots={dots} />
+          <PaletteDots dots={dots} onPickColor={onPickColor} />
           <MetaLine label={typeLabel.note} domain={domain} />
         </View>
         {pending ? <EnrichingLabel /> : null}
@@ -184,7 +197,7 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
             </Text>
           ) : null}
           <View style={styles.footerRow}>
-            <PaletteDots dots={dots} />
+            <PaletteDots dots={dots} onPickColor={onPickColor} />
             <MetaLine label={typeLabel.image} domain={domain} />
           </View>
           {pending ? <EnrichingLabel /> : null}
@@ -207,7 +220,7 @@ export function ItemCard({ item, settings, onPress, onLongPress }: ItemCardProps
           </Text>
         ) : null}
         <View style={styles.footerRow}>
-          <PaletteDots dots={dots} />
+          <PaletteDots dots={dots} onPickColor={onPickColor} />
           <MetaLine label={typeLabel[kind]} domain={domain} />
         </View>
         {pending ? <EnrichingLabel /> : null}
