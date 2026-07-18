@@ -23,11 +23,7 @@ export function Grid({ items }: { items: Item[] }) {
   return (
     <div className="mind-col">
       {items.map((item) => (
-        <Link
-          key={item.id}
-          href={`/item/${item.id}`}
-          style={{ display: "block", position: "relative", color: "inherit", textDecoration: "none" }}
-        >
+        <article key={item.id} style={{ position: "relative" }}>
           {item.pinnedAt ? (
             <span
               aria-label="On desk"
@@ -46,7 +42,13 @@ export function Grid({ items }: { items: Item[] }) {
             />
           ) : null}
           <ItemCard item={item} />
-        </Link>
+          <Link
+            href={`/item/${item.id}`}
+            aria-label={item.title ?? "Open item"}
+            className="card-link"
+            style={{ color: "inherit", textDecoration: "none" }}
+          />
+        </article>
       ))}
     </div>
   );

@@ -59,6 +59,13 @@ body{-webkit-font-smoothing:antialiased}
 }
 @media (prefers-reduced-motion:reduce){.shell-aside{transition:none}}
 
+/* Stretched-link card: a transparent overlay anchor covers the whole card for
+   navigation, while interactive children (colour dots) are raised above it. */
+.card-link{position:absolute;inset:0;z-index:0}
+.dot-link{position:relative;z-index:1;cursor:pointer;text-decoration:none;transition:transform .12s ease}
+.dot-link:hover{transform:scale(1.35)}
+.dot-link:focus-visible{outline:2px solid #1B3FD1;outline-offset:2px}
+
 /* Faint horizontal-rule paper texture; overlay behind card content. */
 .paper-texture{background:repeating-linear-gradient(#00000000 0 31px,rgba(28,26,22,.028) 31px 32px)}
 
