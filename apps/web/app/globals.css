@@ -20,6 +20,19 @@ body{-webkit-font-smoothing:antialiased}
 
 .card:hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(28,26,22,.06),0 20px 44px -20px rgba(28,26,22,.55)}
 
+/* Grid cards get their hover-lift transform on the wrapping <article> instead of
+   .card itself: a non-none transform makes its element a stacking context, and
+   .card is an ancestor of the colour dots but a sibling of the stretched-link
+   overlay (both children of the wrapper) — lifting .card on hover would trap the
+   dots' z-index inside that new stacking context, letting the overlay hit-test
+   above them. Lifting the common ancestor instead keeps the dot/overlay z-index
+   comparison intact. */
+.card-wrap{position:relative;transition:transform .18s ease}
+
+.card-wrap:hover{transform:translateY(-2px)}
+
+.card-wrap .card:hover{transform:none}
+
 .chip{font:500 10px/1 var(--font-jetbrains-mono),'JetBrains Mono',monospace;letter-spacing:.02em;color:#1C1A16;background:#FCFBF6;border:1px solid rgba(28,26,22,.13);padding:6px 11px;border-radius:20px;cursor:pointer;transition:.15s;text-decoration:none;display:inline-block}
 
 .chip:hover{border-color:rgba(28,26,22,.24)}

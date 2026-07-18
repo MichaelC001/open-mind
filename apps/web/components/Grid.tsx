@@ -23,7 +23,7 @@ export function Grid({ items }: { items: Item[] }) {
   return (
     <div className="mind-col">
       {items.map((item) => (
-        <article key={item.id} style={{ position: "relative" }}>
+        <article key={item.id} className="card-wrap">
           {item.pinnedAt ? (
             <span
               aria-label="On desk"
