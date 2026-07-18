@@ -98,6 +98,7 @@ All configuration is via environment variables (see `.env.example`):
 | `TEST_DATABASE_URL` | `postgres://openmind:openmind@localhost:5433/openmind_test` | Connection string used by the Go test suite only. |
 | `PORT` | `8080` | HTTP listen port. |
 | `OPENMIND_TOKEN` | _(empty)_ | Bearer token guarding the API. Empty = unauthenticated (fine for single-user localhost). Set a strong secret before exposing the API on a network. |
+| `TRUSTED_PROXIES` | _(empty)_ | Comma-separated CIDRs/IPs of reverse proxies to trust for `X-Forwarded-For` when resolving the client IP for rate limiting. Empty (default) ignores `X-Forwarded-For` entirely and limits by the direct connection IP. Set it to your reverse proxy's source range so per-client limits work correctly behind a proxy, rather than every request sharing the proxy's own bucket. |
 | `ASSETS_DIR` | `/data/assets` | Directory the API writes uploaded image bytes to. In compose this is backed by the named volume `assetsdata` — do not point it at an ephemeral container path in production. |
 | `ASSETS_MAX_BYTES` | `10485760` (10 MiB) | Maximum accepted upload size for `POST /assets`; larger uploads are rejected with `413`. |
 | `CONTACT_EMAIL` (`web`) | _(empty)_ | Contact address shown on the public `/privacy` and `/terms` pages. Empty falls back to "the operator of this instance" with no mailto link. |

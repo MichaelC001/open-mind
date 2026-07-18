@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"golang.org/x/time/rate"
 )
 
 // TestGuardedPredicate proves the rate-limit predicate covers write/search/list
@@ -57,21 +59,21 @@ func TestGuardedExcludesMCP(t *testing.T) {
 }
 
 func TestMCPRateLimitKeying(t *testing.T) {
-	if k := mcpRateKey(&http.Request{Header: http.Header{"Authorization": []string{"Bearer tok-a"}}, RemoteAddr: "1.2.3.4:99"}); k == "" || k == "1.2.3.4" {
+	if k := mcpRateKey(&http.Request{Header: http.Header{"Authorization": []string{"Bearer tok-a"}}, RemoteAddr: "1.2.3.4:99"}, nil); k == "" || k == "1.2.3.4" {
 		t.Fatalf("credential key = %q, want hash not IP", k)
 	}
-	ka := mcpRateKey(&http.Request{Header: http.Header{"Authorization": []string{"Bearer tok-a"}}, RemoteAddr: "1.2.3.4:99"})
-	kb := mcpRateKey(&http.Request{Header: http.Header{"Authorization": []string{"Bearer tok-b"}}, RemoteAddr: "1.2.3.4:99"})
+	ka := mcpRateKey(&http.Request{Header: http.Header{"Authorization": []string{"Bearer tok-a"}}, RemoteAddr: "1.2.3.4:99"}, nil)
+	kb := mcpRateKey(&http.Request{Header: http.Header{"Authorization": []string{"Bearer tok-b"}}, RemoteAddr: "1.2.3.4:99"}, nil)
 	if ka == kb {
 		t.Fatal("different credentials must key different buckets")
 	}
-	if kip := mcpRateKey(&http.Request{RemoteAddr: "1.2.3.4:99"}); kip != "ip:1.2.3.4" {
+	if kip := mcpRateKey(&http.Request{RemoteAddr: "1.2.3.4:99"}, nil); kip != "ip:1.2.3.4" {
 		t.Fatalf("no-credential key = %q, want ip fallback", kip)
 	}
 }
 
 func TestMCPRateLimitBuckets(t *testing.T) {
-	handler := mcpRateLimit()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := mcpRateLimit(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -115,7 +117,7 @@ func TestMCPRateLimitBuckets(t *testing.T) {
 // mcpRateLimit as mounted in server.go, the per-IP ceiling (20 rps, burst
 // 100) caps the flood regardless of how many distinct credentials appear.
 func TestMCPIPRateLimitCapsUniqueCredentialFlood(t *testing.T) {
-	handler := mcpIPRateLimit()(mcpRateLimit()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := mcpIPRateLimit(nil)(mcpRateLimit(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})))
 
@@ -211,4 +213,58 @@ func TestClientIP(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPerIPRateLimitMiddlewareTrustedProxyThreading proves perIPRateLimit's
+// key function actually consults the trusted set threaded through it, end to
+// end through the middleware: an untrusted peer's spoofed X-Forwarded-For
+// must not mint a new bucket — it shares the peer's own bucket — while a
+// trusted peer's X-Forwarded-For does bucket by the real client it names, so
+// two different real clients behind the proxy get independent limits.
+func TestPerIPRateLimitMiddlewareTrustedProxyThreading(t *testing.T) {
+	trusted, err := parseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	onlyItems := func(_, path string) bool { return path == "/items" }
+	// burst 1, rps 0: exactly one request per bucket ever succeeds, with no refill.
+	handler := perIPRateLimit(rate.Limit(0), 1, onlyItems, trusted)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	doReq := func(remoteAddr, xff string) int {
+		req := httptest.NewRequest(http.MethodGet, "/items", nil)
+		req.RemoteAddr = remoteAddr
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	t.Run("untrusted peer: spoofed XFF shares the peer bucket", func(t *testing.T) {
+		if code := doReq("203.0.113.7:1", "1.1.1.1"); code != http.StatusOK {
+			t.Fatalf("first request = %d, want 200", code)
+		}
+		if code := doReq("203.0.113.7:1", "2.2.2.2"); code != http.StatusTooManyRequests {
+			t.Fatalf("second request (different spoofed XFF, same untrusted peer) = %d, want 429 — the spoof must not mint a new bucket", code)
+		}
+	})
+
+	t.Run("trusted peer: distinct XFF client IPs get distinct buckets", func(t *testing.T) {
+		if code := doReq("10.1.2.3:1", "9.9.9.9"); code != http.StatusOK {
+			t.Fatalf("client A first request = %d, want 200", code)
+		}
+		if code := doReq("10.1.2.3:1", "8.8.8.8"); code != http.StatusOK {
+			t.Fatalf("client B first request = %d, want 200 (distinct bucket from client A)", code)
+		}
+		if code := doReq("10.1.2.3:1", "9.9.9.9"); code != http.StatusTooManyRequests {
+			t.Fatalf("client A repeat request = %d, want 429", code)
+		}
+		if code := doReq("10.1.2.3:1", "8.8.8.8"); code != http.StatusTooManyRequests {
+			t.Fatalf("client B repeat request = %d, want 429", code)
+		}
+	})
 }

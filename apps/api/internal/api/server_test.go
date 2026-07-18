@@ -82,7 +82,7 @@ func newSrvWithKindle(t *testing.T, s *store.Store, rc *river.Client[pgx.Tx], to
 	}
 	feedSvc := feeds.NewService(s)
 	feedSvc.River = rc
-	return api.NewServer(s, rc, p, api.AuthConfig{Mode: api.AuthModeToken, LegacyToken: token}, as, 10<<20, feedSvc, kindleCfg)
+	return api.NewServer(s, rc, p, api.AuthConfig{Mode: api.AuthModeToken, LegacyToken: token}, as, 10<<20, feedSvc, kindleCfg, nil)
 }
 
 // newSrvWithAuthConfig builds a Server with an explicit AuthConfig, for tests
@@ -96,7 +96,7 @@ func newSrvWithAuthConfig(t *testing.T, s *store.Store, rc *river.Client[pgx.Tx]
 	}
 	feedSvc := feeds.NewService(s)
 	feedSvc.River = rc
-	return api.NewServer(s, rc, ai.NewNoop(), authCfg, as, 10<<20, feedSvc, api.KindleConfig{})
+	return api.NewServer(s, rc, ai.NewNoop(), authCfg, as, 10<<20, feedSvc, api.KindleConfig{}, nil)
 }
 
 // parseProvider is a noop provider whose ParseQuery returns a scripted result,
@@ -175,7 +175,7 @@ func TestCreateItemRejectsBadURL(t *testing.T) {
 // reaches the store, so — like TestMCPMountedAndGuarded — a Server built with
 // a nil store/river/provider/assets is safe here; no Postgres required.
 func TestCreateItemRejectsWhitespacePaddedURL(t *testing.T) {
-	srv := httptest.NewServer(api.NewServer(nil, nil, nil, api.AuthConfig{Mode: api.AuthModeToken}, nil, 0, nil, api.KindleConfig{}))
+	srv := httptest.NewServer(api.NewServer(nil, nil, nil, api.AuthConfig{Mode: api.AuthModeToken}, nil, 0, nil, api.KindleConfig{}, nil))
 	t.Cleanup(srv.Close)
 
 	resp := postJSON(t, srv.URL+"/items", `{"url":"http://x.com "}`)
