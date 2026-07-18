@@ -77,12 +77,51 @@ func iinfBox(items []testItem) []byte {
 	return mkBox("iinf", fullBoxBody(0, rest))
 }
 
+// singleItemReferenceBox builds one SingleItemTypeReferenceBox child of an
+// iref box: refType (e.g. "cdsc"), a from_item_ID, and its to_item_IDs, all
+// encoded with idSize-byte item IDs (2 for iref version 0, 4 for version 1) —
+// matching the layout rebuildIref parses: from_item_ID + reference_count +
+// reference_count x to_item_ID.
+func singleItemReferenceBox(refType string, idSize int, fromID uint32, toIDs []uint32) []byte {
+	body := make([]byte, 0, idSize+2+len(toIDs)*idSize)
+	if idSize == 2 {
+		body = append(body, be16(uint16(fromID))...)
+	} else {
+		body = append(body, be32(fromID)...)
+	}
+	body = append(body, be16(uint16(len(toIDs)))...)
+	for _, id := range toIDs {
+		if idSize == 2 {
+			body = append(body, be16(uint16(id))...)
+		} else {
+			body = append(body, be32(id)...)
+		}
+	}
+	return mkBox(refType, body)
+}
+
+// irefBox builds a complete iref (ItemReferenceBox) FullBox of the given
+// version (0 -> 16-bit item IDs in its children, 1 -> 32-bit), wrapping the
+// given SingleItemTypeReferenceBox children (see singleItemReferenceBox).
+func irefBox(version byte, children ...[]byte) []byte {
+	var rest []byte
+	for _, c := range children {
+		rest = append(rest, c...)
+	}
+	return mkBox("iref", fullBoxBody(version, rest))
+}
+
 // buildAVIF assembles a minimal but spec-valid AVIF: ftyp (brand "avif"), a
 // meta box containing hdlr, pitm (pointing at the first "av01" item, or
 // items[0] if none), iinf (one infe per item), and iloc (one extent per item
 // pointing into a trailing mdat), followed by mdat holding each item's bytes
 // back-to-back in order. Reused by Task 2 for stripping tests.
-func buildAVIF(t *testing.T, items []testItem) []byte {
+//
+// extraMetaChildren, if given, are appended to meta's children after iloc
+// (e.g. an iref box built with irefBox) — placed after iloc so they cannot
+// affect the iloc extent_offset patching below, which only depends on the
+// lengths of hdlr/pitm/iinf/iloc's own header.
+func buildAVIF(t *testing.T, items []testItem, extraMetaChildren ...[]byte) []byte {
 	t.Helper()
 
 	ftypBody := make([]byte, 0, 4+4+8)
@@ -136,6 +175,9 @@ func buildAVIF(t *testing.T, items []testItem) []byte {
 	metaChildren = append(metaChildren, pitm...)
 	metaChildren = append(metaChildren, iinf...)
 	metaChildren = append(metaChildren, iloc...)
+	for _, extra := range extraMetaChildren {
+		metaChildren = append(metaChildren, extra...)
+	}
 	meta := mkBox("meta", fullBoxBody(0, metaChildren))
 
 	prefix := make([]byte, 0, len(ftyp)+len(meta))
@@ -443,6 +485,89 @@ func TestStripAVIF_RemovesBoth(t *testing.T) {
 	}
 }
 
+// TestStripAVIF_RemovesIrefToDeletedItem covers rebuildIref, which real
+// libavif output exercises via a meta-level iref containing a "cdsc"
+// (content-describes) reference from the Exif item to the primary av01 item.
+func TestStripAVIF_RemovesIrefToDeletedItem(t *testing.T) {
+	av01Data := []byte("fake-av1-bitstream-payload")
+	exifData := []byte{0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08}
+	const av01ID, exifID = uint32(1), uint32(2)
+
+	cdsc := singleItemReferenceBox("cdsc", 2, exifID, []uint32{av01ID})
+	iref := irefBox(0, cdsc)
+
+	data := buildAVIF(t, []testItem{
+		{id: av01ID, itemType: "av01", data: av01Data},
+		{id: exifID, itemType: "Exif", data: exifData},
+	}, iref)
+
+	out, err := stripAVIF(data)
+	if err != nil {
+		t.Fatalf("stripAVIF: %v", err)
+	}
+
+	// (1) output re-parses via walkBoxes/parseIloc without error.
+	top, err := walkBoxes(out, 0, len(out))
+	if err != nil {
+		t.Fatalf("walkBoxes(out): %v", err)
+	}
+	metaBox, ok := findChild(top, "meta")
+	if !ok {
+		t.Fatalf("no meta box in output")
+	}
+	metaChildren, err := walkBoxes(out, metaBox.start+metaBox.headerLen+4, metaBox.start+metaBox.size)
+	if err != nil {
+		t.Fatalf("walking output meta children: %v", err)
+	}
+	ilocB, ok := findChild(metaChildren, "iloc")
+	if !ok {
+		t.Fatalf("no iloc box in output")
+	}
+	if _, err := parseIloc(out, ilocB); err != nil {
+		t.Fatalf("parseIloc(out): %v", err)
+	}
+
+	// (2) findAVIFMetadataItems(output) is empty.
+	ids, err := findAVIFMetadataItems(out)
+	if err != nil {
+		t.Fatalf("findAVIFMetadataItems(out): %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("output still has metadata items: %v", ids)
+	}
+
+	// (3) the primary av01 payload is byte-identical.
+	if got := itemPayload(t, out, av01ID); !bytes.Equal(got, av01Data) {
+		t.Errorf("av01 payload = %q, want %q", got, av01Data)
+	}
+
+	// (4) the reference to the removed Exif item is gone: since fromID ==
+	// exifID (the removed item), rebuildIref drops the whole cdsc child, so
+	// either iref is now absent or, if present, no child mentions exifID.
+	irefOutB, hasIref := findChild(metaChildren, "iref")
+	if hasIref {
+		irefChildren, err := walkBoxes(out, irefOutB.start+irefOutB.headerLen+4, irefOutB.start+irefOutB.size)
+		if err != nil {
+			t.Fatalf("walking output iref children: %v", err)
+		}
+		for _, c := range irefChildren {
+			bodyStart := c.start + c.headerLen
+			fromID := uint32(binary.BigEndian.Uint16(out[bodyStart : bodyStart+2]))
+			if fromID == exifID {
+				t.Errorf("output iref still has a reference from removed item %d", exifID)
+			}
+			count := int(binary.BigEndian.Uint16(out[bodyStart+2 : bodyStart+4]))
+			for i := 0; i < count; i++ {
+				off := bodyStart + 4 + i*2
+				toID := uint32(binary.BigEndian.Uint16(out[off : off+2]))
+				if toID == exifID {
+					t.Errorf("output iref still has a reference to removed item %d", exifID)
+				}
+			}
+		}
+	}
+}
+
 func TestStripAVIF_CleanIsByteIdentical(t *testing.T) {
 	data := buildAVIF(t, []testItem{
 		{id: 1, itemType: "av01", data: []byte("fake-av1-bitstream-payload")},
@@ -515,7 +640,7 @@ func TestStripAVIF_Malformed(t *testing.T) {
 		}
 		// iloc body layout: size(4)+type(4)+FullBox(4)+sizes(2)+item_count(2)+
 		// [item_ID(2)+data_ref(2)+extent_count(2)+extent_offset(4)+extent_length(4)]...
-		offsetFieldPos := idx + 4 + 4 + 2 + 2 + 2 + 2
+		offsetFieldPos := idx + 4 + 4 + 2 + 2 + 2 + 2 + 2
 		binary.BigEndian.PutUint32(mutated[offsetFieldPos:offsetFieldPos+4], 0xFFFFFFF0)
 
 		func() {
