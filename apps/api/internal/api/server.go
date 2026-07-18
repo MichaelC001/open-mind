@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,8 +69,11 @@ type Server struct {
 // transport (SMTP_HOST + SMTP_FROM) is configured, and whether the server
 // also has a KINDLE_EMAIL fallback recipient; the kindle handlers 409 when
 // SMTP isn't configured, or when it is but neither a fallback recipient nor
-// a per-user kindle_email setting is available.
-func NewServer(s *store.Store, riverClient *river.Client[pgx.Tx], provider ai.Provider, authCfg AuthConfig, assetStore *assets.FSStore, maxBytes int64, feedSvc *feeds.Service, kindleCfg KindleConfig) http.Handler {
+// a per-user kindle_email setting is available. trusted is the set of
+// reverse-proxy networks allowed to supply X-Forwarded-For for client-IP
+// resolution in the rate limiters; nil trusts no proxy and limits by the
+// direct connection IP.
+func NewServer(s *store.Store, riverClient *river.Client[pgx.Tx], provider ai.Provider, authCfg AuthConfig, assetStore *assets.FSStore, maxBytes int64, feedSvc *feeds.Service, kindleCfg KindleConfig, trusted []*net.IPNet) http.Handler {
 	srv := &Server{store: s, riverClient: riverClient, provider: provider, assetStore: assetStore, assetMaxByte: maxBytes, feeds: feedSvc, kindle: kindleCfg}
 	r := chi.NewRouter()
 	// Rate limiting runs before credential resolution so failed guesses consume
@@ -77,10 +81,10 @@ func NewServer(s *store.Store, riverClient *river.Client[pgx.Tx], provider ai.Pr
 	// 429 rather than getting unlimited 401 probes. The device-link claim
 	// endpoint layers its own stricter, dedicated bucket on top since its code
 	// is the only credential on that route.
-	r.Use(rateLimit(rate.Limit(1), 10))
-	r.Use(claimRateLimit())
-	r.Use(mcpIPRateLimit())
-	r.Use(mcpRateLimit())
+	r.Use(rateLimit(rate.Limit(1), 10, trusted))
+	r.Use(claimRateLimit(trusted))
+	r.Use(mcpIPRateLimit(trusted))
+	r.Use(mcpRateLimit(trusted))
 	r.Use(authenticate(s, authCfg))
 	mcpHandler := appmcp.NewHandler(mcpBackend{srv}, func(ctx context.Context) uuid.UUID { return userID(ctx) })
 	r.Handle("/mcp", mcpHandler)

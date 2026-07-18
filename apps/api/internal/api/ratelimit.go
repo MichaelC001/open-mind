@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -17,8 +18,8 @@ import (
 // untouched. GET /items is the login-probe target, so guarding it (with the
 // limiter ahead of bearer auth) throttles token brute-force attempts. Each
 // client gets a token-bucket limiter (rps refill, burst ceiling).
-func rateLimit(rps rate.Limit, burst int) func(http.Handler) http.Handler {
-	return perIPRateLimit(rps, burst, guarded)
+func rateLimit(rps rate.Limit, burst int, trusted []*net.IPNet) func(http.Handler) http.Handler {
+	return perIPRateLimit(rps, burst, guarded, trusted)
 }
 
 // claimRateLimit throttles POST /device-links/claim with a small, strict
@@ -26,10 +27,10 @@ func rateLimit(rps rate.Limit, burst int) func(http.Handler) http.Handler {
 // device code is the only credential on that route, so it's the one place a
 // stranger can cheaply guess at a secret, and it deserves a tighter ceiling
 // than the rest of the API.
-func claimRateLimit() func(http.Handler) http.Handler {
+func claimRateLimit(trusted []*net.IPNet) func(http.Handler) http.Handler {
 	return perIPRateLimit(rate.Limit(5.0/60.0), 5, func(method, path string) bool {
 		return method == http.MethodPost && path == "/device-links/claim"
-	})
+	}, trusted)
 }
 
 // mcpRateKey buckets an /mcp request by the presented credential (hashed) so
@@ -44,21 +45,21 @@ func claimRateLimit() func(http.Handler) http.Handler {
 // own fresh 5rps/burst-20 bucket, so this keying alone bounds neither
 // unauthenticated 401 probing nor limiter-map growth. That is deliberately
 // left to mcpIPRateLimit, a loose per-IP layer mounted ahead of this one.
-func mcpRateKey(r *http.Request) string {
+func mcpRateKey(r *http.Request, trusted []*net.IPNet) string {
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		sum := sha256.Sum256([]byte(auth))
 		return "cred:" + hex.EncodeToString(sum[:8])
 	}
-	return "ip:" + clientIP(r)
+	return "ip:" + clientIP(r, trusted)
 }
 
 // mcpRateLimit throttles /mcp per credential: 5 req/s with burst 20 —
 // tool-calling agents legitimately burst, so this is looser per caller than
 // the global per-IP bucket the endpoint used to share.
-func mcpRateLimit() func(http.Handler) http.Handler {
+func mcpRateLimit(trusted []*net.IPNet) func(http.Handler) http.Handler {
 	return perKeyRateLimit(rate.Limit(5), 20, func(method, path string) bool {
 		return strings.HasPrefix(path, "/mcp")
-	}, mcpRateKey)
+	}, func(r *http.Request) string { return mcpRateKey(r, trusted) })
 }
 
 // mcpIPRateLimit is a loose per-IP ceiling on /mcp (20 rps, burst 100) mounted
@@ -69,17 +70,17 @@ func mcpRateLimit() func(http.Handler) http.Handler {
 // interactive agent traffic — including all proxied browser-origin MCP
 // traffic arriving from the web container's single IP — so it never bites
 // real usage, but it caps a single-IP flood and bounds limiter-map growth.
-func mcpIPRateLimit() func(http.Handler) http.Handler {
+func mcpIPRateLimit(trusted []*net.IPNet) func(http.Handler) http.Handler {
 	return perIPRateLimit(rate.Limit(20), 100, func(method, path string) bool {
 		return strings.HasPrefix(path, "/mcp")
-	})
+	}, trusted)
 }
 
 // perIPRateLimit throttles requests matching match(method, path) with a
 // per-client-IP token-bucket limiter (rps refill, burst ceiling). Limiters are
 // created lazily per IP and evicted after 10 minutes of inactivity.
-func perIPRateLimit(rps rate.Limit, burst int, match func(method, path string) bool) func(http.Handler) http.Handler {
-	return perKeyRateLimit(rps, burst, match, func(r *http.Request) string { return clientIP(r) })
+func perIPRateLimit(rps rate.Limit, burst int, match func(method, path string) bool, trusted []*net.IPNet) func(http.Handler) http.Handler {
+	return perKeyRateLimit(rps, burst, match, func(r *http.Request) string { return clientIP(r, trusted) })
 }
 
 // perKeyRateLimit throttles requests matching match(method, path) with a
@@ -169,15 +170,76 @@ type ipLimiter struct {
 	lastSeen time.Time
 }
 
-// clientIP returns the first hop of X-Forwarded-For when present, else the host
-// portion of RemoteAddr.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
+// parseTrustedProxies parses a comma-separated list of CIDRs and/or bare IPs
+// (a bare IP becomes a /32 or /128) into networks. Empty input yields nil
+// (trust no proxy). An unparseable entry is a hard error so misconfiguration
+// fails loudly at startup rather than silently trusting nothing.
+func parseTrustedProxies(s string) ([]*net.IPNet, error) {
+	var nets []*net.IPNet
+	for _, raw := range strings.Split(s, ",") {
+		part := strings.TrimSpace(raw)
+		if part == "" {
+			continue
+		}
+		if _, n, err := net.ParseCIDR(part); err == nil {
+			nets = append(nets, n)
+			continue
+		}
+		ip := net.ParseIP(part)
+		if ip == nil {
+			return nil, fmt.Errorf("trusted proxy %q is not a valid IP or CIDR", part)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
 	}
+	return nets, nil
+}
+
+// ParseTrustedProxies is the exported entry point for parsing the
+// TRUSTED_PROXIES env var; see parseTrustedProxies for the format and
+// semantics.
+func ParseTrustedProxies(s string) ([]*net.IPNet, error) {
+	return parseTrustedProxies(s)
+}
+
+// ipInNets reports whether ip falls within any of nets.
+func ipInNets(ip net.IP, nets []*net.IPNet) bool {
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP resolves the caller's IP for rate-bucketing. X-Forwarded-For is
+// consulted ONLY when the direct peer (RemoteAddr) is a configured trusted
+// proxy; then the rightmost XFF entry that is not itself a trusted proxy is the
+// real client. With no trusted proxies, or an untrusted peer, XFF is ignored
+// and the socket peer IP is used — so a directly-exposed API cannot have its
+// per-IP buckets farmed with a spoofed header.
+func clientIP(r *http.Request, trusted []*net.IPNet) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	peer := net.ParseIP(host)
+	if peer == nil || !ipInNets(peer, trusted) {
+		return host
+	}
+	xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	parts := strings.Split(xff, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		cand := net.ParseIP(strings.TrimSpace(parts[i]))
+		if cand == nil {
+			continue
+		}
+		if !ipInNets(cand, trusted) {
+			return cand.String()
+		}
 	}
 	return host
 }
