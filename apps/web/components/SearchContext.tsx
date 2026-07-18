@@ -102,7 +102,7 @@ export function SearchContext({
         {hasEcho ? "Understood as" : "Search by colour"}
       </span>
 
-      {!hasEcho && <ColourHint dismissedBySearch={Boolean(colorParam)} />}
+      <ColourHint dismissedBySearch={Boolean(colorParam)} suppressed={hasEcho} />
 
       {hasEcho && (
         <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
