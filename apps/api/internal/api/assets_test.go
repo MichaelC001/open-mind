@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -198,18 +199,228 @@ func jpegWithExif(t *testing.T) []byte {
 	return out
 }
 
-func TestCreateAssetRejectsAVIF(t *testing.T) {
+// --- minimal AVIF fixture builder ---
+//
+// internal/assets/avif_test.go already has a general-purpose buildAVIF, but
+// it lives in a _test.go file so it isn't importable from this package
+// (api_test), and exporting a testing.T-taking helper from a non-test file
+// in internal/assets would leak a test-only concern into production code.
+// The least-invasive option is to duplicate the (small) box-assembly logic
+// needed for exactly the two fixtures this test needs: a valid AVIF with one
+// av01 item + one Exif item, and a corrupt one. See avif-task-3-report.md
+// for the fuller rationale.
+
+func avifBE16(v uint16) []byte {
+	b := make([]byte, 2)
+	binary.BigEndian.PutUint16(b, v)
+	return b
+}
+
+func avifBE32(v uint32) []byte {
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, v)
+	return b
+}
+
+func avifMkBox(typ string, body []byte) []byte {
+	out := make([]byte, 0, 8+len(body))
+	out = append(out, avifBE32(uint32(8+len(body)))...)
+	out = append(out, []byte(typ)...)
+	out = append(out, body...)
+	return out
+}
+
+func avifFullBoxBody(version byte, rest []byte) []byte {
+	body := make([]byte, 0, 4+len(rest))
+	body = append(body, version, 0, 0, 0)
+	body = append(body, rest...)
+	return body
+}
+
+func avifInfe(id uint16, itemType string) []byte {
+	rest := make([]byte, 0, 2+2+4+1)
+	rest = append(rest, avifBE16(id)...) // item_ID (version 2: 16-bit)
+	rest = append(rest, avifBE16(0)...)  // item_protection_index
+	rest = append(rest, []byte(itemType)...)
+	rest = append(rest, 0x00) // item_name, empty and null-terminated
+	return avifMkBox("infe", avifFullBoxBody(2, rest))
+}
+
+// buildTestAVIF assembles a minimal but spec-valid AVIF (ftyp brand "avif",
+// meta with hdlr/pitm/iinf/iloc, trailing mdat) with exactly two items: an
+// av01 item (id 1, primary) and an Exif item (id 2), mirroring the layout
+// internal/assets/avif_test.go's buildAVIF produces for the same case.
+func buildTestAVIF(t *testing.T, av01Data, exifData []byte) []byte {
+	t.Helper()
+
+	ftypBody := make([]byte, 0, 4+4+8)
+	ftypBody = append(ftypBody, []byte("avif")...) // major_brand
+	ftypBody = append(ftypBody, avifBE32(0)...)    // minor_version
+	ftypBody = append(ftypBody, []byte("avif")...) // compatible_brands...
+	ftypBody = append(ftypBody, []byte("mif1")...)
+	ftyp := avifMkBox("ftyp", ftypBody)
+
+	hdlrRest := make([]byte, 0, 4+4+12+1)
+	hdlrRest = append(hdlrRest, 0, 0, 0, 0)
+	hdlrRest = append(hdlrRest, []byte("pict")...)
+	hdlrRest = append(hdlrRest, make([]byte, 12)...)
+	hdlrRest = append(hdlrRest, 0x00)
+	hdlr := avifMkBox("hdlr", avifFullBoxBody(0, hdlrRest))
+
+	pitm := avifMkBox("pitm", avifFullBoxBody(0, avifBE16(1))) // primary item = av01 (id 1)
+
+	iinfRest := avifBE16(2) // entry_count
+	iinfRest = append(iinfRest, avifInfe(1, "av01")...)
+	iinfRest = append(iinfRest, avifInfe(2, "Exif")...)
+	iinf := avifMkBox("iinf", avifFullBoxBody(0, iinfRest))
+
+	// iloc: offset_size=4, length_size=4, base_offset_size=0, index_size=0;
+	// one extent per item, offsets patched below once mdat's position is known.
+	itemIDs := []uint16{1, 2}
+	lengths := []int{len(av01Data), len(exifData)}
+	ilocRest := []byte{0x44, 0x00}
+	ilocRest = append(ilocRest, avifBE16(uint16(len(itemIDs)))...) // item_count
+	patchPos := make([]int, len(itemIDs))
+	for i, id := range itemIDs {
+		ilocRest = append(ilocRest, avifBE16(id)...) // item_ID
+		ilocRest = append(ilocRest, avifBE16(0)...)  // data_reference_index
+		ilocRest = append(ilocRest, avifBE16(1)...)  // extent_count
+		patchPos[i] = len(ilocRest)
+		ilocRest = append(ilocRest, avifBE32(0)...)                  // extent_offset (placeholder)
+		ilocRest = append(ilocRest, avifBE32(uint32(lengths[i]))...) // extent_length
+	}
+	iloc := avifMkBox("iloc", avifFullBoxBody(0, ilocRest))
+
+	var metaChildren []byte
+	metaChildren = append(metaChildren, hdlr...)
+	metaChildren = append(metaChildren, pitm...)
+	metaChildren = append(metaChildren, iinf...)
+	metaChildren = append(metaChildren, iloc...)
+	meta := avifMkBox("meta", avifFullBoxBody(0, metaChildren))
+
+	prefix := make([]byte, 0, len(ftyp)+len(meta))
+	prefix = append(prefix, ftyp...)
+	prefix = append(prefix, meta...)
+
+	// Absolute position (within prefix) of iloc's own body, so patchPos
+	// (relative to ilocRest) can be translated into absolute prefix offsets.
+	ilocRestBase := len(ftyp) + 8 /* meta header */ + 4 /* meta version/flags */ +
+		len(hdlr) + len(pitm) + len(iinf) + 8 /* iloc header */ + 4 /* iloc version/flags */
+
+	mdatPayload := make([]byte, 0, len(av01Data)+len(exifData))
+	itemOffsetInMdat := make([]int, len(itemIDs))
+	itemOffsetInMdat[0] = 0
+	mdatPayload = append(mdatPayload, av01Data...)
+	itemOffsetInMdat[1] = len(mdatPayload)
+	mdatPayload = append(mdatPayload, exifData...)
+
+	const mdatHeaderLen = 8
+	for i := range itemIDs {
+		abs := len(prefix) + mdatHeaderLen + itemOffsetInMdat[i]
+		pos := ilocRestBase + patchPos[i]
+		binary.BigEndian.PutUint32(prefix[pos:pos+4], uint32(abs))
+	}
+
+	out := make([]byte, 0, len(prefix)+mdatHeaderLen+len(mdatPayload))
+	out = append(out, prefix...)
+	out = append(out, avifMkBox("mdat", mdatPayload)...)
+	return out
+}
+
+// buildMalformedAVIF returns a byte slice that still sniffs as "image/avif"
+// (its ftyp box is intact and complete) but whose meta box is truncated mid
+// way through iloc's entries: the meta/iloc box headers still declare their
+// original, now-too-large sizes, so parsing it fails rather than silently
+// producing a wrong result — exercising the StripMetadata error path (400),
+// as opposed to the allowlist path (415).
+func buildMalformedAVIF(t *testing.T) []byte {
+	t.Helper()
+	full := buildTestAVIF(t, []byte("fake-av1-bitstream-payload"), []byte{0x4D, 0x4D, 0x00, 0x2A})
+	idx := bytes.Index(full, []byte("iloc"))
+	if idx < 0 {
+		t.Fatalf("fixture has no iloc box")
+	}
+	return append([]byte(nil), full[:idx+12]...)
+}
+
+func TestCreateAssetAVIFAccepted(t *testing.T) {
 	s, rc, _ := testDeps(t)
+	h, dir := newSrvWithAssets(t, s, rc, 10<<20)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	avif := buildTestAVIF(t, []byte("fake-av1-bitstream-payload"), []byte{0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08})
+	resp := postUpload(t, srv.URL+"/assets", "photo.avif", avif)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (AVIF should now be accepted)", resp.StatusCode)
+	}
+
+	var item map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	lead, _ := item["leadImageUrl"].(string)
+	if !strings.HasPrefix(lead, "/assets/") {
+		t.Fatalf("leadImageUrl = %q, want /assets/ prefix", lead)
+	}
+	assetID := strings.TrimPrefix(lead, "/assets/")
+
+	stored, err := os.ReadFile(filepath.Join(dir, assetID))
+	if err != nil {
+		t.Fatalf("reading stored blob: %v", err)
+	}
+
+	// The Exif item must be gone from the stored bytes: re-stripping should be
+	// a no-op (byte-identical output), proving the upload path already
+	// stripped it rather than storing it verbatim.
+	reStripped, err := assets.StripMetadata("image/avif", stored)
+	if err != nil {
+		t.Fatalf("StripMetadata(stored): %v", err)
+	}
+	if !bytes.Equal(reStripped, stored) {
+		t.Errorf("stored AVIF bytes are not already stripped: re-stripping changed them (stored %d bytes, re-stripped %d bytes)", len(stored), len(reStripped))
+	}
+}
+
+func TestCreateAssetMalformedAVIF400(t *testing.T) {
+	s, rc, pool := testDeps(t)
 	h, _ := newSrvWithAssets(t, s, rc, 10<<20)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
-	// Minimal ISOBMFF ftyp box with an avif brand.
-	avif := []byte{0, 0, 0, 0x14, 'f', 't', 'y', 'p', 'a', 'v', 'i', 'f', 0, 0, 0, 0, 'm', 'i', 'f', '1'}
-	resp := postUpload(t, srv.URL+"/assets", "photo.avif", avif)
+	var itemsBefore int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM items`).Scan(&itemsBefore); err != nil {
+		t.Fatalf("counting items before: %v", err)
+	}
+
+	resp := postUpload(t, srv.URL+"/assets", "corrupt.avif", buildMalformedAVIF(t))
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnsupportedMediaType {
-		t.Errorf("status = %d, want 415", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["error"] != "could not process image" {
+		t.Errorf("error = %v, want %q", body["error"], "could not process image")
+	}
+
+	var itemsAfter int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM items`).Scan(&itemsAfter); err != nil {
+		t.Fatalf("counting items after: %v", err)
+	}
+	if itemsAfter != itemsBefore {
+		t.Errorf("items count = %d, want unchanged %d (no orphan row on 400)", itemsAfter, itemsBefore)
+	}
+
+	var assetsCount int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM assets`).Scan(&assetsCount); err != nil {
+		t.Fatalf("counting assets: %v", err)
+	}
+	if assetsCount != 0 {
+		t.Errorf("assets count = %d, want 0 (no asset row on 400)", assetsCount)
 	}
 }
 
