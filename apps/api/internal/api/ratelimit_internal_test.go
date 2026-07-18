@@ -213,6 +213,38 @@ func TestClientIP(t *testing.T) {
 			}
 		})
 	}
+
+	// A trusted proxy that forwards the client's XFF as one header line and
+	// appends its own hop as a SEPARATE header line (rather than appending to
+	// the same comma-joined line) must not let the spoofed first line win:
+	// r.Header.Get only ever returns the first line, so a naive
+	// Get-and-split reads just "1.2.3.4" and (wrongly) trusts it outright
+	// instead of walking past the proxy's own appended hop.
+	t.Run("trusted peer: two separate XFF header lines, rightmost non-trusted across both wins", func(t *testing.T) {
+		r, err := http.NewRequest(http.MethodGet, "/items", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.RemoteAddr = "10.1.2.3:5555"
+		r.Header.Set("X-Forwarded-For", "1.2.3.4")
+		r.Header.Add("X-Forwarded-For", "10.0.0.9")
+		if got := clientIP(r, trusted); got != "1.2.3.4" {
+			t.Errorf("clientIP = %q, want %q (rightmost non-trusted across both header lines)", got, "1.2.3.4")
+		}
+	})
+
+	t.Run("trusted peer: second appended XFF header line is itself the real untrusted client", func(t *testing.T) {
+		r, err := http.NewRequest(http.MethodGet, "/items", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.RemoteAddr = "10.1.2.3:5555"
+		r.Header.Add("X-Forwarded-For", "1.2.3.4")
+		r.Header.Add("X-Forwarded-For", "5.6.7.8")
+		if got := clientIP(r, trusted); got != "5.6.7.8" {
+			t.Errorf("clientIP = %q, want %q (rightmost hop, the second header line)", got, "5.6.7.8")
+		}
+	})
 }
 
 // TestPerIPRateLimitMiddlewareTrustedProxyThreading proves perIPRateLimit's

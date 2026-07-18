@@ -230,7 +230,8 @@ func clientIP(r *http.Request, trusted []*net.IPNet) string {
 	if peer == nil || !ipInNets(peer, trusted) {
 		return host
 	}
-	parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	parts := strings.Split(xff, ",")
 	for i := len(parts) - 1; i >= 0; i-- {
 		cand := net.ParseIP(strings.TrimSpace(parts[i]))
 		if cand == nil {
