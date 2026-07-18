@@ -63,3 +63,9 @@ export function resolveColor(term: string | undefined): string | null {
   if (HEX_RE.test(t)) return normaliseHex(t);
   return NAMED_COLORS[t] ?? null;
 }
+
+// Home href that runs a colour search for the given term (hex like "#1B3FD1"
+// or a named colour). Encoded so "#" and spaces survive the query string.
+export function colorSearchHref(term: string): string {
+  return `/?color=${encodeURIComponent(term)}`;
+}
