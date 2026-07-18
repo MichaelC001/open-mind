@@ -3,6 +3,7 @@ import { tokens } from "@openmind/ui";
 import { cardKind, typeLabel } from "../lib/cards";
 import { COLOR_SWATCHES, resolveColor } from "../lib/colors";
 import type { UnderstoodQuery } from "../lib/types";
+import { ColourHint } from "./ColourHint";
 
 const { color, font } = tokens;
 
@@ -100,6 +101,8 @@ export function SearchContext({
       <span className="meta" style={{ flex: "none" }}>
         {hasEcho ? "Understood as" : "Search by colour"}
       </span>
+
+      {!hasEcho && <ColourHint dismissedBySearch={Boolean(colorParam)} />}
 
       {hasEcho && (
         <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
