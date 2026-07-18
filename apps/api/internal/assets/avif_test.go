@@ -298,3 +298,261 @@ func TestFindAVIFMetadataItems(t *testing.T) {
 		}
 	})
 }
+
+// itemPayload re-parses data's iloc for the item with the given id (assumed
+// single-extent, construction_method 0 into a top-level mdat) and returns its
+// payload bytes sliced out of mdat. Used to assert losslessness of the av01
+// item across a stripAVIF round-trip.
+func itemPayload(t *testing.T, data []byte, id uint32) []byte {
+	t.Helper()
+
+	top, err := walkBoxes(data, 0, len(data))
+	if err != nil {
+		t.Fatalf("walkBoxes: %v", err)
+	}
+	metaBox, ok := findChild(top, "meta")
+	if !ok {
+		t.Fatalf("no meta box in output")
+	}
+	metaChildren, err := walkBoxes(data, metaBox.start+metaBox.headerLen+4, metaBox.start+metaBox.size)
+	if err != nil {
+		t.Fatalf("walking meta children: %v", err)
+	}
+	ilocB, ok := findChild(metaChildren, "iloc")
+	if !ok {
+		t.Fatalf("no iloc box in output")
+	}
+	parsed, err := parseIloc(data, ilocB)
+	if err != nil {
+		t.Fatalf("parseIloc: %v", err)
+	}
+	mdatB, ok := findChild(top, "mdat")
+	if !ok {
+		t.Fatalf("no mdat box in output")
+	}
+	mdatPayloadStart := mdatB.start + mdatB.headerLen
+
+	for _, it := range parsed.items {
+		if it.id != id {
+			continue
+		}
+		if it.constructionMethod != 0 {
+			t.Fatalf("item %d: unsupported construction_method %d in test helper", id, it.constructionMethod)
+		}
+		if len(it.extents) != 1 {
+			t.Fatalf("item %d: expected exactly 1 extent, got %d", id, len(it.extents))
+		}
+		ext := it.extents[0]
+		abs := it.baseOffset + ext.offset
+		start := int(abs) - mdatPayloadStart
+		end := start + int(ext.length)
+		if start < 0 || end > len(data)-mdatPayloadStart {
+			t.Fatalf("item %d: extent [%d,%d) out of bounds", id, start, end)
+		}
+		return data[mdatPayloadStart+start : mdatPayloadStart+end]
+	}
+	t.Fatalf("item %d not found in output iloc", id)
+	return nil
+}
+
+func TestStripAVIF_RemovesExif(t *testing.T) {
+	av01Data := []byte("fake-av1-bitstream-payload")
+	data := buildAVIF(t, []testItem{
+		{id: 1, itemType: "av01", data: av01Data},
+		{id: 2, itemType: "Exif", data: []byte{0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08}},
+	})
+
+	out, err := stripAVIF(data)
+	if err != nil {
+		t.Fatalf("stripAVIF: %v", err)
+	}
+
+	ids, err := findAVIFMetadataItems(out)
+	if err != nil {
+		t.Fatalf("findAVIFMetadataItems(out): %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("output still has metadata items: %v", ids)
+	}
+
+	if got := itemPayload(t, out, 1); !bytes.Equal(got, av01Data) {
+		t.Errorf("av01 payload = %q, want %q", got, av01Data)
+	}
+
+	if len(out) >= len(data) {
+		t.Errorf("output len %d not smaller than input len %d", len(out), len(data))
+	}
+}
+
+func TestStripAVIF_RemovesXMP(t *testing.T) {
+	av01Data := []byte("fake-av1-bitstream-payload")
+	data := buildAVIF(t, []testItem{
+		{id: 1, itemType: "av01", data: av01Data},
+		{id: 2, itemType: "mime", contentType: "application/rdf+xml", data: []byte("<x:xmpmeta>hello</x:xmpmeta>")},
+	})
+
+	out, err := stripAVIF(data)
+	if err != nil {
+		t.Fatalf("stripAVIF: %v", err)
+	}
+
+	ids, err := findAVIFMetadataItems(out)
+	if err != nil {
+		t.Fatalf("findAVIFMetadataItems(out): %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("output still has metadata items: %v", ids)
+	}
+
+	if got := itemPayload(t, out, 1); !bytes.Equal(got, av01Data) {
+		t.Errorf("av01 payload = %q, want %q", got, av01Data)
+	}
+
+	if len(out) >= len(data) {
+		t.Errorf("output len %d not smaller than input len %d", len(out), len(data))
+	}
+}
+
+func TestStripAVIF_RemovesBoth(t *testing.T) {
+	av01Data := []byte("fake-av1-bitstream-payload")
+	data := buildAVIF(t, []testItem{
+		{id: 1, itemType: "av01", data: av01Data},
+		{id: 2, itemType: "Exif", data: []byte{0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08}},
+		{id: 3, itemType: "mime", contentType: "application/rdf+xml", data: []byte("<x:xmpmeta>hello</x:xmpmeta>")},
+	})
+
+	out, err := stripAVIF(data)
+	if err != nil {
+		t.Fatalf("stripAVIF: %v", err)
+	}
+
+	ids, err := findAVIFMetadataItems(out)
+	if err != nil {
+		t.Fatalf("findAVIFMetadataItems(out): %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("output still has metadata items: %v", ids)
+	}
+
+	if got := itemPayload(t, out, 1); !bytes.Equal(got, av01Data) {
+		t.Errorf("av01 payload = %q, want %q", got, av01Data)
+	}
+
+	if len(out) >= len(data) {
+		t.Errorf("output len %d not smaller than input len %d", len(out), len(data))
+	}
+}
+
+func TestStripAVIF_CleanIsByteIdentical(t *testing.T) {
+	data := buildAVIF(t, []testItem{
+		{id: 1, itemType: "av01", data: []byte("fake-av1-bitstream-payload")},
+	})
+
+	out, err := stripAVIF(data)
+	if err != nil {
+		t.Fatalf("stripAVIF: %v", err)
+	}
+	if !bytes.Equal(out, data) {
+		t.Errorf("clean fixture: output not byte-identical to input")
+	}
+}
+
+func TestStripAVIF_Idempotent(t *testing.T) {
+	data := buildAVIF(t, []testItem{
+		{id: 1, itemType: "av01", data: []byte("fake-av1-bitstream-payload")},
+		{id: 2, itemType: "Exif", data: []byte{0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08}},
+	})
+
+	out1, err := stripAVIF(data)
+	if err != nil {
+		t.Fatalf("stripAVIF (first pass): %v", err)
+	}
+	out2, err := stripAVIF(out1)
+	if err != nil {
+		t.Fatalf("stripAVIF (second pass): %v", err)
+	}
+	if !bytes.Equal(out1, out2) {
+		t.Errorf("stripAVIF is not idempotent: first and second pass differ")
+	}
+}
+
+func TestStripAVIF_Malformed(t *testing.T) {
+	t.Run("truncated meta", func(t *testing.T) {
+		data := buildAVIF(t, []testItem{
+			{id: 1, itemType: "av01", data: []byte("fake-av1-bitstream-payload")},
+			{id: 2, itemType: "Exif", data: []byte{0x4D, 0x4D, 0x00, 0x2A}},
+		})
+		idx := bytes.Index(data, []byte("iloc"))
+		if idx < 0 {
+			t.Fatalf("fixture has no iloc box")
+		}
+		// Cut partway through the iloc box's entries: upstream box headers
+		// (ftyp/meta/iloc) still declare their original, now-too-large sizes.
+		truncated := append([]byte(nil), data[:idx+12]...)
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("stripAVIF panicked: %v", r)
+				}
+			}()
+			if _, err := stripAVIF(truncated); err == nil {
+				t.Errorf("expected error on truncated meta/iloc")
+			}
+		}()
+	})
+
+	t.Run("iloc offset past EOF", func(t *testing.T) {
+		data := buildAVIF(t, []testItem{
+			{id: 1, itemType: "av01", data: []byte("fake-av1-bitstream-payload")},
+			{id: 2, itemType: "Exif", data: []byte{0x4D, 0x4D, 0x00, 0x2A}},
+		})
+		mutated := append([]byte(nil), data...)
+		// Find the iloc box and stomp the first extent_offset with a huge value.
+		idx := bytes.Index(mutated, []byte("iloc"))
+		if idx < 0 {
+			t.Fatalf("fixture has no iloc box")
+		}
+		// iloc body layout: size(4)+type(4)+FullBox(4)+sizes(2)+item_count(2)+
+		// [item_ID(2)+data_ref(2)+extent_count(2)+extent_offset(4)+extent_length(4)]...
+		offsetFieldPos := idx + 4 + 4 + 2 + 2 + 2 + 2
+		binary.BigEndian.PutUint32(mutated[offsetFieldPos:offsetFieldPos+4], 0xFFFFFFF0)
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("stripAVIF panicked: %v", r)
+				}
+			}()
+			if _, err := stripAVIF(mutated); err == nil {
+				t.Errorf("expected error on out-of-bounds iloc offset")
+			}
+		}()
+	})
+
+	t.Run("oversized box declares size past EOF", func(t *testing.T) {
+		data := buildAVIF(t, []testItem{
+			{id: 1, itemType: "av01", data: []byte("fake-av1-bitstream-payload")},
+			{id: 2, itemType: "Exif", data: []byte{0x4D, 0x4D, 0x00, 0x2A}},
+		})
+		mutated := append([]byte(nil), data...)
+		idx := bytes.Index(mutated, []byte("meta"))
+		if idx < 0 {
+			t.Fatalf("fixture has no meta box")
+		}
+		// meta's size field is the 4 bytes immediately before "meta".
+		sizePos := idx - 4
+		binary.BigEndian.PutUint32(mutated[sizePos:sizePos+4], 0x7FFFFFFF)
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("stripAVIF panicked: %v", r)
+				}
+			}()
+			if _, err := stripAVIF(mutated); err == nil {
+				t.Errorf("expected error on oversized meta box")
+			}
+		}()
+	})
+}
