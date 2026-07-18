@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -49,7 +50,8 @@ func mcpRateKey(r *http.Request) string {
 		sum := sha256.Sum256([]byte(auth))
 		return "cred:" + hex.EncodeToString(sum[:8])
 	}
-	return "ip:" + clientIP(r)
+	// TODO(task 2): thread the real trusted-proxy list here instead of nil.
+	return "ip:" + clientIP(r, nil)
 }
 
 // mcpRateLimit throttles /mcp per credential: 5 req/s with burst 20 —
@@ -79,7 +81,8 @@ func mcpIPRateLimit() func(http.Handler) http.Handler {
 // per-client-IP token-bucket limiter (rps refill, burst ceiling). Limiters are
 // created lazily per IP and evicted after 10 minutes of inactivity.
 func perIPRateLimit(rps rate.Limit, burst int, match func(method, path string) bool) func(http.Handler) http.Handler {
-	return perKeyRateLimit(rps, burst, match, func(r *http.Request) string { return clientIP(r) })
+	// TODO(task 2): thread the real trusted-proxy list here instead of nil.
+	return perKeyRateLimit(rps, burst, match, func(r *http.Request) string { return clientIP(r, nil) })
 }
 
 // perKeyRateLimit throttles requests matching match(method, path) with a
@@ -169,15 +172,68 @@ type ipLimiter struct {
 	lastSeen time.Time
 }
 
-// clientIP returns the first hop of X-Forwarded-For when present, else the host
-// portion of RemoteAddr.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
+// parseTrustedProxies parses a comma-separated list of CIDRs and/or bare IPs
+// (a bare IP becomes a /32 or /128) into networks. Empty input yields nil
+// (trust no proxy). An unparseable entry is a hard error so misconfiguration
+// fails loudly at startup rather than silently trusting nothing.
+func parseTrustedProxies(s string) ([]*net.IPNet, error) {
+	var nets []*net.IPNet
+	for _, raw := range strings.Split(s, ",") {
+		part := strings.TrimSpace(raw)
+		if part == "" {
+			continue
+		}
+		if _, n, err := net.ParseCIDR(part); err == nil {
+			nets = append(nets, n)
+			continue
+		}
+		ip := net.ParseIP(part)
+		if ip == nil {
+			return nil, fmt.Errorf("trusted proxy %q is not a valid IP or CIDR", part)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
 	}
+	return nets, nil
+}
+
+// ipInNets reports whether ip falls within any of nets.
+func ipInNets(ip net.IP, nets []*net.IPNet) bool {
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP resolves the caller's IP for rate-bucketing. X-Forwarded-For is
+// consulted ONLY when the direct peer (RemoteAddr) is a configured trusted
+// proxy; then the rightmost XFF entry that is not itself a trusted proxy is the
+// real client. With no trusted proxies, or an untrusted peer, XFF is ignored
+// and the socket peer IP is used — so a directly-exposed API cannot have its
+// per-IP buckets farmed with a spoofed header.
+func clientIP(r *http.Request, trusted []*net.IPNet) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	peer := net.ParseIP(host)
+	if peer == nil || !ipInNets(peer, trusted) {
+		return host
+	}
+	parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		cand := net.ParseIP(strings.TrimSpace(parts[i]))
+		if cand == nil {
+			continue
+		}
+		if !ipInNets(cand, trusted) {
+			return cand.String()
+		}
 	}
 	return host
 }

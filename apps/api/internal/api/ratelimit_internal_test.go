@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -144,5 +145,70 @@ func TestMCPIPRateLimitCapsUniqueCredentialFlood(t *testing.T) {
 
 	if code := doReq(http.MethodGet, "/items", "tok-a", "9.9.9.9:1"); code != http.StatusOK {
 		t.Fatalf("GET /items passthrough: got %d, want 200", code)
+	}
+}
+
+func mustReq(t *testing.T, remoteAddr, xff string) *http.Request {
+	t.Helper()
+	r, err := http.NewRequest(http.MethodGet, "/items", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.RemoteAddr = remoteAddr
+	if xff != "" {
+		r.Header.Set("X-Forwarded-For", xff)
+	}
+	return r
+}
+
+func TestParseTrustedProxies(t *testing.T) {
+	if nets, err := parseTrustedProxies(""); err != nil || nets != nil {
+		t.Fatalf("empty: got %v, %v", nets, err)
+	}
+	nets, err := parseTrustedProxies("10.0.0.0/8, 192.168.1.5 , ::1")
+	if err != nil {
+		t.Fatalf("valid: %v", err)
+	}
+	if len(nets) != 3 {
+		t.Fatalf("want 3 nets, got %d", len(nets))
+	}
+	// bare IPv4 → /32
+	if ones, _ := nets[1].Mask.Size(); ones != 32 {
+		t.Errorf("bare IPv4 mask = /%d, want /32", ones)
+	}
+	// bare IPv6 → /128
+	if ones, _ := nets[2].Mask.Size(); ones != 128 {
+		t.Errorf("bare IPv6 mask = /%d, want /128", ones)
+	}
+	if _, err := parseTrustedProxies("not-an-ip"); err == nil {
+		t.Error("invalid entry: want error")
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	trusted, err := parseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, remoteAddr, xff string
+		trusted               []*net.IPNet
+		want                  string
+	}{
+		{"no trusted set ignores xff", "203.0.113.7:5555", "1.2.3.4", nil, "203.0.113.7"},
+		{"untrusted peer ignores spoofed xff", "203.0.113.7:5555", "1.2.3.4", trusted, "203.0.113.7"},
+		{"trusted peer takes rightmost non-trusted", "10.1.2.3:5555", "9.9.9.9, 8.8.8.8", trusted, "8.8.8.8"},
+		{"trusted peer skips trailing trusted hops", "10.1.2.3:5555", "8.8.8.8, 10.0.0.9", trusted, "8.8.8.8"},
+		{"trusted peer empty xff falls back to peer", "10.1.2.3:5555", "", trusted, "10.1.2.3"},
+		{"trusted peer all-trusted xff falls back to peer", "10.1.2.3:5555", "10.0.0.9, 10.0.0.8", trusted, "10.1.2.3"},
+		{"remoteaddr without port", "203.0.113.7", "", trusted, "203.0.113.7"},
+		{"invalid xff token skipped", "10.1.2.3:5555", "garbage, 8.8.8.8", trusted, "8.8.8.8"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := clientIP(mustReq(t, tt.remoteAddr, tt.xff), tt.trusted); got != tt.want {
+				t.Errorf("clientIP = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
