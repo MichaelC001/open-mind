@@ -28,6 +28,7 @@ var allowedImageTypes = map[string]struct{}{
 	"image/jpeg": {},
 	"image/gif":  {},
 	"image/webp": {},
+	"image/avif": {},
 }
 
 // detectImageType returns the sniffed content-type of buf, restricted to image

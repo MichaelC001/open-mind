@@ -108,7 +108,7 @@ All configuration is via environment variables (see `.env.example`):
 
 In `docker-compose.yml`, the `api` service mounts a named volume (`assetsdata:/data/assets`) so uploaded images survive container recreation — back it up the same way you back up `pgdata` if you rely on saved images. The volume is created automatically the first time you run `docker compose up`; no manual step is required.
 
-**Privacy note:** uploaded JPEG, PNG, WebP, and GIF images have EXIF/GPS, XMP, and IPTC metadata stripped losslessly on upload (pixel data is untouched — only metadata segments/chunks are removed). AVIF uploads are rejected with `415 unsupported image type` pending lossless AVIF metadata stripping support.
+**Privacy note:** uploaded JPEG, PNG, WebP, and AVIF images have EXIF/GPS, XMP, and IPTC metadata stripped losslessly on upload (pixel data is untouched — only metadata segments/chunks are removed). GIF images are stored unchanged, including any metadata they carry. A malformed image (recognised type, but its bytes fail to parse) is rejected with `400 could not process image` rather than being stored.
 
 ## PDF capture
 

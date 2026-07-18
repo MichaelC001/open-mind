@@ -9,11 +9,11 @@ import (
 // comments) from an image while leaving the pixel/scan data byte-identical.
 // It is lossless: the returned bytes decode to the same image.
 //
-// contentType selects the per-format parser. JPEG, PNG, and WebP are parsed
-// and rewritten; GIF is returned as an unchanged copy (its metadata surface is
-// negligible and the container is awkward to walk safely). Unrecognised types
-// return a copy unchanged. Malformed or truncated input for a strippable
-// format returns an error so a bad upload never reaches storage.
+// contentType selects the per-format parser. JPEG, PNG, WebP, and AVIF are
+// parsed and rewritten; GIF is returned as an unchanged copy (its metadata
+// surface is negligible and the container is awkward to walk safely).
+// Unrecognised types return a copy unchanged. Malformed or truncated input for
+// a strippable format returns an error so a bad upload never reaches storage.
 func StripMetadata(contentType string, data []byte) ([]byte, error) {
 	switch contentType {
 	case "image/jpeg":
@@ -22,6 +22,8 @@ func StripMetadata(contentType string, data []byte) ([]byte, error) {
 		return stripPNG(data)
 	case "image/webp":
 		return stripWebP(data)
+	case "image/avif":
+		return stripAVIF(data)
 	default:
 		// GIF and anything else: return an independent copy, unchanged.
 		return append([]byte(nil), data...), nil
