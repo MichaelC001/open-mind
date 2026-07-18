@@ -3,7 +3,7 @@ import { tokens } from "@openmind/ui";
 import type { Item } from "../lib/types";
 import { ItemCard } from "./ItemCard";
 
-export function Grid({ items }: { items: Item[] }) {
+export function Grid({ items, colorActive }: { items: Item[]; colorActive?: boolean }) {
   if (items.length === 0) {
     return (
       <p
@@ -15,7 +15,9 @@ export function Grid({ items }: { items: Item[] }) {
           marginTop: "2rem",
         }}
       >
-        Nothing gathered yet — drop a link or a thought above.
+        {colorActive
+          ? "No saves match that colour yet — colours come from each save's palette, so try a warmer or cooler shade."
+          : "Nothing gathered yet — drop a link or a thought above."}
       </p>
     );
   }
