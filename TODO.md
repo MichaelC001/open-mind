@@ -19,6 +19,10 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Colour-search discovery: clickable palette dots (cards + item rail) run a
+  colour search, one-time hint on the search-by-colour strip, colour-aware
+  empty state; mobile tap-a-dot Library colour filter (next dev build) —
+  issue-free in-app education (2026-07-18)
 - Re-allow AVIF uploads with lossless EXIF/XMP stripping (ISOBMFF container
   rewrite, fail-closed, OOM-bounded) — issue #7 (2026-07-18)
 - Adaptive feed polling: per-feed intervals (reset on new items, back off to
