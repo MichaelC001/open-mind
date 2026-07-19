@@ -122,7 +122,7 @@ export default function LibraryScreen() {
     [onOpen, pinItem, deleteItem, present],
   );
 
-  if (!loading && !configured) return <Redirect href="/settings" />;
+  if (!loading && !configured) return <Redirect href="/sign-in" />;
 
   const items = listQuery.data?.items ?? [];
   const count = items.length;

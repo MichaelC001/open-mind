@@ -14,8 +14,60 @@ API token).
 ## Prerequisites
 
 - Node 18+ and a running Openmind instance you can reach from the phone.
-- An **API token** for that instance (the same `OPENMIND_TOKEN` you use for the
-  browser extension — see the root `docs/self-hosting.md`).
+- An **API token** for that instance, OR Clerk sign-in credentials (see
+  [Mobile authentication](#mobile-authentication) below).
+
+## Mobile authentication
+
+The app supports two authentication methods:
+
+### Clerk sign-in (recommended for cloud instances)
+
+If your Openmind instance uses Clerk, users can sign in directly from the app with
+**Continue with Google** (OAuth) or **email authentication code**. After successful
+authentication, the app exchanges the Clerk JWT for a long-lived device API key
+(prefixed `omk_`), stores it securely in the device keychain, and signs out of Clerk
+— subsequent requests use the device key.
+
+**Clerk setup (instance maintainer):**
+
+1. Log into your Clerk dashboard (e.g. `clerk.openmind.gilla.fun` for the default
+   cloud instance).
+2. Create a new **Native** application: **Applications** → **+ Create application**,
+   select **Native**.
+3. Enable the **Google** social connection under **Social Connections**.
+4. In the application's OAuth redirect settings, add: `openmind://`
+5. Copy your **Publishable Key**.
+
+**EAS environment variables (preview):**
+
+To enable Clerk sign-in in EAS preview builds, set these Expo environment variables
+in the **preview** EAS environment:
+
+- `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` — your Clerk publishable key (required to
+  enable in-app sign-in).
+- `EXPO_PUBLIC_INSTANCE_URL` (optional) — your instance URL; defaults to
+  `https://openmind.gilla.fun`.
+
+Expo automatically inlines `EXPO_PUBLIC_*` variables into the app during builds.
+
+If `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` is not set—for example, when self-hosting on a
+different instance—in-app Clerk sign-in is hidden and users fall back to manual
+authentication (see below).
+
+### Manual authentication (self-hosters and alternative instances)
+
+For instances without Clerk or when deploying on a custom domain, authenticate by
+entering an API token manually in the app's Settings screen. On first launch, you
+land on **Settings**:
+
+1. Enter your **instance URL** (e.g., `https://openmind.example.com`).
+2. Paste your **API token** (the same `OPENMIND_TOKEN` used for the browser
+   extension — see the root `docs/self-hosting.md`).
+3. Tap **Validate & save** — the app calls `GET /api/auth/check` and stores the
+   token in the device keychain (`expo-secure-store`) on success.
+
+Then Capture and Library become usable.
 
 ## Install
 
@@ -138,5 +190,5 @@ target is a preview surface only — ship the native app for real use.
 ```bash
 cd apps/mobile
 ./node_modules/.bin/tsc --noEmit           # types
-./node_modules/.bin/expo export --platform web   # web bundle builds
+./node_modules/.bin/expo config --json > /dev/null   # app config resolves
 ```

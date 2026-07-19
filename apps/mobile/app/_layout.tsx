@@ -5,6 +5,7 @@ import {
 } from "@expo-google-fonts/instrument-sans";
 import { JetBrainsMono_400Regular, JetBrainsMono_500Medium } from "@expo-google-fonts/jetbrains-mono";
 import { Newsreader_500Medium_Italic, Newsreader_600SemiBold_Italic } from "@expo-google-fonts/newsreader";
+import { ClerkProvider } from "@clerk/clerk-expo";
 import { useFonts } from "expo-font";
 import { useShareIntent } from "expo-share-intent";
 import { Stack, useRouter } from "expo-router";
@@ -14,6 +15,7 @@ import { useEffect } from "react";
 import { View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { CaptureQueueProvider } from "@/lib/capture-queue-context";
+import { clerkPublishableKey, tokenCache } from "@/lib/clerk";
 import { QueryProvider } from "@/lib/query";
 import { SettingsProvider } from "@/lib/settings-context";
 import { colors } from "@/lib/theme";
@@ -80,24 +82,34 @@ export default function RootLayout() {
     return <View style={{ flex: 1, backgroundColor: colors.paper }} />;
   }
 
+  const tree = (
+    <QueryProvider>
+      <SettingsProvider>
+        <CaptureQueueProvider>
+          <StatusBar style="dark" />
+          <ShareIntentGate />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: colors.canvas },
+            }}
+          >
+            <Stack.Screen name="(tabs)" />
+          </Stack>
+        </CaptureQueueProvider>
+      </SettingsProvider>
+    </QueryProvider>
+  );
+
   return (
     <SafeAreaProvider>
-      <QueryProvider>
-        <SettingsProvider>
-          <CaptureQueueProvider>
-            <StatusBar style="dark" />
-            <ShareIntentGate />
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: colors.canvas },
-              }}
-            >
-              <Stack.Screen name="(tabs)" />
-            </Stack>
-          </CaptureQueueProvider>
-        </SettingsProvider>
-      </QueryProvider>
+      {clerkPublishableKey ? (
+        <ClerkProvider publishableKey={clerkPublishableKey} tokenCache={tokenCache}>
+          {tree}
+        </ClerkProvider>
+      ) : (
+        tree
+      )}
     </SafeAreaProvider>
   );
 }

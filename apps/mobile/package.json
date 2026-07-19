@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@bacons/apple-targets": "^4.0.7",
+    "@clerk/clerk-expo": "^2.19.31",
     "@expo-google-fonts/instrument-sans": "^0.4.2",
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
     "@expo-google-fonts/newsreader": "^0.4.1",
@@ -20,8 +21,10 @@
     "@react-native-community/netinfo": "12.0.1",
     "@tanstack/react-query": "^5.101.2",
     "expo": "~57.0.7",
+    "expo-auth-session": "~57.0.4",
     "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.3",
+    "expo-crypto": "~57.0.1",
     "expo-font": "~57.0.0",
     "expo-image-picker": "~57.0.5",
     "expo-linear-gradient": "~57.0.1",
