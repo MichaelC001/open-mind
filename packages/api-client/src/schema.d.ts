@@ -443,7 +443,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Text search (q), colour-proximity search (color), or both fused. Set parse=true to interpret q as a natural-language query — the AI provider splits it into a text portion, a colour, and card-type filters, all fused into one search. At least one of q or color is required. */
+        /** @description Text search (q), colour-proximity search (color), or both fused. Set parse=true to interpret q as a natural-language query — the AI provider splits it into a text portion, a colour, and card-type filters, all fused into one search. At least one of q or color is required. Results rank library items (direct saves and kept feed items) ahead of unkept feed-river matches; within each group ordering is by descending fused score. */
         get: operations["searchItems"];
         put?: never;
         post?: never;
@@ -603,7 +603,7 @@ export interface components {
             lat?: number;
             /** Format: double */
             lng?: number;
-            /** @description which signal produced this place (caption) */
+            /** @description which signal produced this place (caption or vision) */
             source: string;
         };
         PlaceWithItem: components["schemas"]["Place"] & {

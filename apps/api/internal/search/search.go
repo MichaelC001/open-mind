@@ -55,6 +55,13 @@ func Hybrid(ctx context.Context, s *store.Store, p ai.Provider, userID uuid.UUID
 //     provider can embed), and
 //   - palette colour proximity to color (when color is non-empty).
 //
+// Results are partitioned library-first: items in the user's library (saved
+// directly, or kept from a feed) always rank ahead of unkept feed-river
+// matches, which trail the list. Within each partition ordering is by
+// descending fused score. Feed matches stay included — Lenses deliberately
+// span the river — but they never displace a library match, and the limit is
+// applied after the partition so library matches win the available slots.
+//
 // When types is non-empty the fused results are narrowed to items of those card
 // types before the limit is applied, so ranking is computed over all matches
 // and only then filtered.
@@ -122,9 +129,14 @@ func Run(ctx context.Context, s *store.Store, p ai.Provider, userID uuid.UUID, q
 	for id := range scores {
 		ids = append(ids, id)
 	}
-	// Descending fused score, with a deterministic tiebreak (newest first,
-	// then ID) so equal-scored results order stably across requests.
+	// Library items first, then descending fused score, with a deterministic
+	// tiebreak (newest first, then ID) so equal-scored results order stably
+	// across requests.
 	sort.SliceStable(ids, func(i, j int) bool {
+		li, lj := inLibrary(items[ids[i]]), inLibrary(items[ids[j]])
+		if li != lj {
+			return li
+		}
 		si, sj := scores[ids[i]], scores[ids[j]]
 		if si != sj {
 			return si > sj
@@ -192,6 +204,13 @@ func RunLensRule(ctx context.Context, s *store.Store, p ai.Provider, userID uuid
 	return results, nil
 }
 
+// inLibrary reports whether an item belongs to the user's library (the Mind):
+// anything saved directly, plus feed items the user explicitly kept. Unkept
+// feed-river items are still searchable but rank after every library match.
+func inLibrary(it db.Item) bool {
+	return !it.FeedID.Valid || it.KeptAt.Valid
+}
+
 func ftsRowToItem(r db.SearchFTSRow) db.Item {
 	return db.Item{
 		ID: r.ID, UserID: r.UserID, Url: r.Url, Title: r.Title, Body: r.Body,
@@ -200,6 +219,7 @@ func ftsRowToItem(r db.SearchFTSRow) db.Item {
 		CardType: r.CardType, Status: r.Status, SearchTsv: r.SearchTsv,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		PinnedAt: r.PinnedAt, LastDriftedAt: r.LastDriftedAt,
+		FeedID: r.FeedID, KeptAt: r.KeptAt,
 		// PageCount is left as its zero value (invalid pgtype.Int4), so search
 		// results always render pageCount as null even for PDF items.
 	}
@@ -213,6 +233,7 @@ func vecRowToItem(r db.SearchVectorRow) db.Item {
 		CardType: r.CardType, Status: r.Status, SearchTsv: r.SearchTsv,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		PinnedAt: r.PinnedAt, LastDriftedAt: r.LastDriftedAt,
+		FeedID: r.FeedID, KeptAt: r.KeptAt,
 		// PageCount is left as its zero value (invalid pgtype.Int4), so search
 		// results always render pageCount as null even for PDF items.
 	}

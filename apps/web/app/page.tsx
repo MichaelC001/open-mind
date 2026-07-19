@@ -1,3 +1,4 @@
+import { tokens } from "@openmind/ui";
 import { apiFetch } from "../lib/api";
 import { cardKind } from "../lib/cards";
 import type { Item, SearchResponse, UnderstoodQuery } from "../lib/types";
@@ -46,6 +47,26 @@ async function getSearch(q?: string, color?: string): Promise<SearchOutcome> {
   }
 }
 
+// An unkept feed-river item: searchable, but not part of the Mind until kept,
+// so search shows it below the divider rather than among library matches.
+function isFeedOnly(item: Item): boolean {
+  return Boolean(item.feedId) && !item.keptAt;
+}
+
+function FeedDivider({ count }: { count: number }) {
+  return (
+    <div
+      role="separator"
+      aria-label="Matches from your feeds"
+      style={{ display: "flex", alignItems: "center", gap: 12, margin: "30px 0 20px" }}
+    >
+      <span aria-hidden style={{ flex: 1, height: 1, background: tokens.color.hairline }} />
+      <span className="meta">From your feeds · {count} — not yet in your Mind</span>
+      <span aria-hidden style={{ flex: 1, height: 1, background: tokens.color.hairline }} />
+    </div>
+  );
+}
+
 export default async function Page({
   searchParams,
 }: {
@@ -60,6 +81,12 @@ export default async function Page({
     : { items: await getRecents(), understood: undefined };
   const items =
     active === "all" ? fetched : fetched.filter((i) => cardKind(i.cardType) === active);
+  // Search spans the feed river, but the library always leads: results from
+  // the API arrive library-first, and unkept feed matches render below a
+  // divider. Recents (/items) never include unkept feed items, so the divider
+  // only ever appears while searching.
+  const libraryItems = items.filter((i) => !isFeedOnly(i));
+  const feedItems = items.filter(isFeedOnly);
 
   return (
     <Shell>
@@ -91,7 +118,27 @@ export default async function Page({
               <ImageDrop />
             </div>
           </div>
-          <Grid items={items} colorActive={Boolean(color)} />
+          {libraryItems.length > 0 || feedItems.length === 0 ? (
+            <Grid items={libraryItems} colorActive={Boolean(color)} />
+          ) : (
+            <p
+              style={{
+                fontFamily: tokens.font.quote,
+                fontStyle: "italic",
+                fontSize: "1.25rem",
+                color: tokens.color.inkMuted,
+                marginTop: "2rem",
+              }}
+            >
+              Nothing in your Mind matches — these came through your feeds.
+            </p>
+          )}
+          {feedItems.length > 0 && (
+            <>
+              <FeedDivider count={feedItems.length} />
+              <Grid items={feedItems} colorActive={Boolean(color)} />
+            </>
+          )}
         </div>
       </div>
     </Shell>
