@@ -502,3 +502,37 @@ export async function listPlaces(
     return { ok: false, status: 0, places: [] };
   }
 }
+
+/**
+ * Mint a long-lived API key using a Clerk session JWT, via
+ * POST {instanceUrl}/api/api-keys. Used right after native Clerk sign-in so
+ * the app can store an omk_ key and use it for every subsequent request (no
+ * Clerk-session refresh). The returned key is a secret and is never logged.
+ */
+export async function mintDeviceKey(
+  instanceUrl: string,
+  clerkToken: string,
+  name: string,
+): Promise<{ ok: boolean; status: number; key?: string }> {
+  const url = instanceUrl.trim().replace(/\/+$/, "");
+  if (!url) return { ok: false, status: 0 };
+  try {
+    const res = await fetch(`${url}/api/api-keys`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${clerkToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    let key: string | undefined;
+    if (res.status === 201) {
+      try {
+        const data = (await res.json()) as { key?: string };
+        key = data.key;
+      } catch {
+        key = undefined;
+      }
+    }
+    return { ok: res.status === 201 && !!key, status: res.status, key };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
