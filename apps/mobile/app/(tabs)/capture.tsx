@@ -122,6 +122,7 @@ export default function CaptureScreen() {
           saved += 1;
         } else if (res.status === 401) {
           setStatus({ kind: "rejected" });
+          if (saved > 0) invalidateLists();
           return;
         } else if (res.status === 0) {
           setStatus({
@@ -156,16 +157,20 @@ export default function CaptureScreen() {
     [invalidateLists],
   );
 
-  // Shared images from Android SEND intents land here as JSON and upload immediately.
+  // Shared images from Android SEND intents land here as JSON and upload
+  // immediately once settings are ready. Do not consume the param while
+  // unconfigured — otherwise a share-before-connect fails with no feedback.
   const appliedImagesRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const raw = typeof params.sharedImages === "string" ? params.sharedImages : undefined;
     if (!raw || raw === appliedImagesRef.current) return;
+    if (loading) return;
+    if (!configured) return;
     appliedImagesRef.current = raw;
     const files = parseSharedImages(raw);
     if (files.length === 0) return;
     void uploadFiles(files);
-  }, [params.sharedImages, uploadFiles]);
+  }, [params.sharedImages, uploadFiles, configured, loading]);
 
   useFocusEffect(
     useCallback(() => {

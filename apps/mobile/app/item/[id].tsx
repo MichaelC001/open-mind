@@ -25,31 +25,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import { ApiError, getItem, getItemPlaces, sendItemToKindle, type ItemDetail, type Place } from "@/lib/api";
 import { cardKind } from "@/lib/cards";
+import { leadImageSource } from "@/lib/lead-image";
 import { useDeleteItem, useKeepItem, usePinItem } from "@/lib/mutations";
 import { queryKeys } from "@/lib/query";
 import { useSettingsContext } from "@/lib/settings-context";
 import type { Settings } from "@/lib/settings";
 import { colors, fonts, radius, spacing, typeGradients, type CardKind } from "@/lib/theme";
 import { stripMarkdown } from "@/lib/text";
-
-/**
- * Resolve an item's leadImageUrl into an <Image> source. Instance-relative
- * `/assets/<id>` paths need the instance URL + bearer header.
- */
-function leadImageSource(
-  leadImageUrl: string | undefined,
-  settings: Settings | null,
-): { uri: string; headers?: Record<string, string> } | undefined {
-  if (!leadImageUrl) return undefined;
-  if (leadImageUrl.startsWith("/assets/")) {
-    if (!settings) return undefined;
-    return {
-      uri: `${settings.instanceUrl}${leadImageUrl}`,
-      headers: { Authorization: `Bearer ${settings.token}` },
-    };
-  }
-  return { uri: leadImageUrl };
-}
 
 /** Types that get a gradient hero wash on the detail screen. */
 const HERO_KINDS: readonly CardKind[] = ["article", "image", "product", "book", "recipe", "video", "tweet"];

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { AccessibilityInfo, Animated, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import type { Item } from "@/lib/api";
 import { cardKind, typeLabel } from "@/lib/cards";
+import { leadImageSource } from "@/lib/lead-image";
 import type { Settings } from "@/lib/settings";
 import { colors, fonts, radius, spacing, type, typeGradients, type CardKind } from "@/lib/theme";
 import { stripMarkdown } from "@/lib/text";
@@ -13,26 +14,6 @@ function hostOf(url?: string): string | null {
   const match = /^[a-z]+:\/\/([^/?#]+)/i.exec(url.trim());
   if (!match) return null;
   return match[1].replace(/^www\./i, "");
-}
-
-/**
- * Resolve an item's leadImageUrl into an <Image> source. An instance-relative
- * path (`/assets/<id>`) needs the instance URL prefix plus a bearer header;
- * an absolute URL (http...) is already public and renders as-is.
- */
-function imageSource(
-  leadImageUrl: string | undefined,
-  settings: Settings | null,
-): { uri: string; headers?: Record<string, string> } | undefined {
-  if (!leadImageUrl) return undefined;
-  if (leadImageUrl.startsWith("/assets/")) {
-    if (!settings) return undefined;
-    return {
-      uri: `${settings.instanceUrl}${leadImageUrl}`,
-      headers: { Authorization: `Bearer ${settings.token}` },
-    };
-  }
-  return { uri: leadImageUrl };
 }
 
 /** Palette dots — the signature brand detail. Max 5, 9px, inset hairline ring. */
@@ -131,7 +112,7 @@ export function ItemCard({ item, settings, onPress, onLongPress, onPickColor }: 
   const pinned = !!item.pinnedAt;
   const domain = hostOf(item.url);
   const dots = item.palette ?? [];
-  const source = imageSource(item.leadImageUrl, settings);
+  const source = leadImageSource(item.leadImageUrl, settings);
   const rawTitle = stripMarkdown(item.title?.trim());
   const title = rawTitle || domain || item.url || "Untitled";
   const summary = stripMarkdown(item.summary);
