@@ -1,14 +1,15 @@
 # Openmind mobile
 
-A thin Expo (SDK 57) client for [Openmind](../../README.md): capture links and notes
-into your instance from your phone — especially via the **share sheet** (share any
-link/text from another app → it lands in Capture, pre-filled) — plus a minimal
-library view with search and token login. All enrichment stays server-side; the app
-only talks to your instance's `/api/*` with a Bearer token.
+A thin Expo (SDK 57) client for [Openmind](../../README.md): capture links, notes,
+and photos into your instance from your phone — especially via the **share sheet**
+(share any link/text/image from another app → it lands in Openmind) — plus a
+minimal library view with search and token login. All enrichment stays
+server-side; the app only talks to your instance's `/api/*` with a Bearer token.
 
 Screens: **Library** (recent items + search), **Desk** (pinned items), **Feed**
-(subscribed feeds), **Capture** (paste a URL / jot a note → Save, with an offline
-queue), **Settings** (instance URL + API token).
+(subscribed feeds), **Capture** (paste a URL / jot a note / choose or take a
+photo → Save, with an offline queue for URL/note), **Settings** (instance URL +
+API token).
 
 ## Prerequisites
 
@@ -78,8 +79,11 @@ Capture is optimistic about bad networks:
 
 URL entries already in the queue are deduped. Cap is 100 (oldest dropped).
 
+Photo uploads (`POST /api/assets`) are **online-only** for now — a network failure
+shows an error instead of queuing the blob.
+
 > **Share extension caveat:** the offline queue covers **in-app Capture** (and
-> Android share → Capture prefill). The iOS inline share extension
+> Android share → Capture prefill for URL/text). The iOS inline share extension
 > (`targets/share`) still does a live POST only — failed shares there are not
 > queued yet.
 
@@ -98,17 +102,22 @@ The two platforms take different routes:
 - **iOS — inline save, no app switch.** A native Swift share extension
   (`targets/share/`, built with
   [`@bacons/apple-targets`](https://github.com/EvanBacon/expo-apple-targets))
-  POSTs the shared URL/text straight to `POST {instanceUrl}/api/items` and
-  shows a small "Saved to Openmind" card over the host app. It reads
-  `{ instanceUrl, token }` from the App Group (`group.fun.gilla.openmind`)
-  shared UserDefaults, which the app mirrors from Settings — so **connect the
-  app once before using the share sheet**. Activation rules (one URL, web
-  pages, plain text) live in `targets/share/Info.plist`. Swift edits don't
-  need a new prebuild; config changes do (`npx expo prebuild --clean -p ios`).
+  POSTs shared URL/text to `POST {instanceUrl}/api/items`, or shared images
+  (converted to JPEG) to `POST {instanceUrl}/api/assets`, and shows a small
+  "Saved to Openmind" card over the host app. It reads `{ instanceUrl, token }`
+  from the App Group (`group.fun.gilla.openmind`) shared UserDefaults, which
+  the app mirrors from Settings — so **connect the app once before using the
+  share sheet**. Activation rules (one URL, web pages, plain text, one image)
+  live in `targets/share/Info.plist`. Swift edits don't need a new prebuild;
+  config changes do (`npx expo prebuild --clean -p ios`).
 - **Android — opens the app.** [`expo-share-intent`](https://github.com/achorein/expo-share-intent)
-  handles `text/*` SEND intents (iOS side disabled in `app.json`); the app
-  opens on **Capture** pre-filled with the shared URL/text; tap **Save**.
-  Offline saves from this path use the same Capture queue.
+  handles `text/*` and `image/*` SEND intents (iOS side disabled in `app.json`);
+  the app opens on **Capture** — URL/text is pre-filled for Save; images upload
+  immediately via `POST /api/assets`. Offline URL/note saves from this path use
+  the same Capture queue.
+
+In-app Capture also has **Choose photo** / **Take photo** (photo library +
+camera via `expo-image-picker`) so you can save images without leaving Openmind.
 
 > Note: the token is mirrored into App Group UserDefaults (not the keychain) so
 > the extension can authenticate. On-device it is sandboxed to this app group;

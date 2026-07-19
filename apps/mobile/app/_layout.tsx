@@ -21,8 +21,9 @@ import { colors } from "@/lib/theme";
 // Held open until the brand fonts finish loading below.
 void SplashScreen.preventAutoHideAsync();
 
-// Watches for a shared URL/text (Android SEND intent) and, when one arrives,
-// routes to the Capture tab pre-filled with it. iOS shares are handled by the
+// Watches for a shared URL/text/image (Android SEND intent) and, when one
+// arrives, routes to the Capture tab. Text/URL is pre-filled; images are
+// handed off as JSON and uploaded immediately. iOS shares are handled by the
 // native share extension in targets/share (inline save, never opens the app),
 // so expo-share-intent is Android-only; on iOS/web the native module is absent
 // and `useShareIntent` no-ops — keeping both builds working.
@@ -34,9 +35,23 @@ function ShareIntentGate() {
 
   useEffect(() => {
     if (!hasShareIntent) return;
-    const shared = shareIntent.webUrl ?? shareIntent.text ?? "";
-    if (shared) {
-      router.navigate({ pathname: "/capture", params: { shared } });
+    const imageFiles = (shareIntent.files ?? []).filter(
+      (f) => typeof f.mimeType === "string" && f.mimeType.startsWith("image/") && !!f.path,
+    );
+    if (imageFiles.length > 0) {
+      const sharedImages = JSON.stringify(
+        imageFiles.map((f) => ({
+          uri: f.path,
+          name: f.fileName || "photo.jpg",
+          type: f.mimeType || "image/jpeg",
+        })),
+      );
+      router.navigate({ pathname: "/capture", params: { sharedImages } });
+    } else {
+      const shared = shareIntent.webUrl ?? shareIntent.text ?? "";
+      if (shared) {
+        router.navigate({ pathname: "/capture", params: { shared } });
+      }
     }
     resetShareIntent();
     // Only react to a newly-received intent; resetShareIntent clears it after.

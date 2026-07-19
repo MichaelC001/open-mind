@@ -97,6 +97,52 @@ export async function saveItem(
   }
 }
 
+/** Local file descriptor for multipart upload to POST /api/assets. */
+export type AssetUpload = {
+  uri: string;
+  name: string;
+  type: string;
+};
+
+/**
+ * Upload an image (or PDF) via POST {instanceUrl}/api/assets. The server
+ * sniffs content-type, strips image metadata, creates an image card, and
+ * queues enrichment. Do not set Content-Type — fetch must supply the
+ * multipart boundary. Online-only for now (no offline queue for blobs).
+ */
+export async function uploadAsset(
+  file: AssetUpload,
+  override?: Settings,
+): Promise<{ ok: boolean; status: number; item?: Item }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0 };
+  try {
+    const form = new FormData();
+    // React Native's FormData accepts { uri, name, type } for file parts.
+    form.append("file", {
+      uri: file.uri,
+      name: file.name,
+      type: file.type,
+    } as unknown as Blob);
+    const res = await fetch(`${settings.instanceUrl}/api/assets`, {
+      method: "POST",
+      headers: authHeaders(settings.token),
+      body: form,
+    });
+    let item: Item | undefined;
+    if (res.status === 201) {
+      try {
+        item = (await res.json()) as Item;
+      } catch {
+        item = undefined;
+      }
+    }
+    return { ok: res.ok, status: res.status, item };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
+
 /**
  * Normalise a device-connect code for submission: trim, uppercase, and
  * reinsert the dash if the user typed it without one (e.g. "abcdefgh" ->
