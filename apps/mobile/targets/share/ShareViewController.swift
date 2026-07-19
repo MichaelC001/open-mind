@@ -1,8 +1,8 @@
 import UIKit
 import UniformTypeIdentifiers
 
-// Inline share UI for Openmind: receives a URL or text from the share sheet,
-// POSTs it to {instanceUrl}/api/items with the Bearer token, and dismisses.
+// Inline share UI for Openmind: receives a URL, text, or image from the share
+// sheet, POSTs it to the instance API with the Bearer token, and dismisses.
 // Credentials come from the App Group UserDefaults suite, mirrored there by
 // the main app's settings screen (lib/settings.ts via ExtensionStorage).
 //
@@ -34,30 +34,47 @@ class ShareViewController: UIViewController {
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
-    loadSharedContent { [weak self] url, text in
-      DispatchQueue.main.async { self?.save(url: url, text: text) }
+    loadSharedContent { [weak self] payload in
+      DispatchQueue.main.async { self?.save(payload) }
     }
   }
 
   // MARK: - Content loading
 
+  private enum SharedPayload {
+    case url(URL)
+    case text(String)
+    case image(Data, filename: String, mimeType: String)
+  }
+
   /// Walks every attachment on every input item (shares can carry mixed
-  /// content) and hands back the first URL and/or plain-text payload found.
-  private func loadSharedContent(completion: @escaping (URL?, String?) -> Void) {
+  /// content) and hands back the first image, URL, or plain-text payload found.
+  /// Images win over URL/text so Photos/Files shares upload as assets.
+  private func loadSharedContent(completion: @escaping (SharedPayload?) -> Void) {
     let providers = (extensionContext?.inputItems as? [NSExtensionItem])?
       .compactMap(\.attachments).flatMap { $0 } ?? []
 
     guard !providers.isEmpty else {
-      completion(nil, nil)
+      completion(nil)
       return
     }
 
+    var foundImage: SharedPayload?
     var foundURL: URL?
     var foundText: String?
     let group = DispatchGroup()
 
     for provider in providers {
-      if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+      if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+        group.enter()
+        provider.loadItem(forTypeIdentifier: UTType.image.identifier, options: nil) { [weak self] item, _ in
+          defer { group.leave() }
+          guard foundImage == nil, let self else { return }
+          if let payload = self.imagePayload(from: item) {
+            foundImage = payload
+          }
+        }
+      } else if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
         group.enter()
         provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
           if let url = item as? URL, foundURL == nil { foundURL = url }
@@ -72,12 +89,58 @@ class ShareViewController: UIViewController {
       }
     }
 
-    group.notify(queue: .main) { completion(foundURL, foundText) }
+    group.notify(queue: .main) {
+      if let foundImage {
+        completion(foundImage)
+      } else if let foundURL {
+        completion(.url(foundURL))
+      } else if let foundText {
+        completion(.text(foundText))
+      } else {
+        completion(nil)
+      }
+    }
+  }
+
+  /// Normalise a share-sheet image item into JPEG bytes. Photos often hand us
+  /// a file URL (HEIC) or a UIImage; the API allowlist is jpeg/png/gif/webp/avif,
+  /// so JPEG is the safe common denominator and keeps the extension memory budget.
+  private func imagePayload(from item: NSSecureCoding?) -> SharedPayload? {
+    if let url = item as? URL {
+      guard let data = try? Data(contentsOf: url) else { return nil }
+      if let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.92) {
+        let name = url.deletingPathExtension().lastPathComponent
+        let filename = (name.isEmpty ? "photo" : name) + ".jpg"
+        return .image(jpeg, filename: filename, mimeType: "image/jpeg")
+      }
+      // Already a supported raster format (e.g. PNG/JPEG) — pass through.
+      let ext = url.pathExtension.lowercased()
+      let mime: String?
+      switch ext {
+      case "jpg", "jpeg": mime = "image/jpeg"
+      case "png": mime = "image/png"
+      case "gif": mime = "image/gif"
+      case "webp": mime = "image/webp"
+      default: mime = nil
+      }
+      if let mime {
+        return .image(data, filename: url.lastPathComponent, mimeType: mime)
+      }
+      return nil
+    }
+    if let image = item as? UIImage, let jpeg = image.jpegData(compressionQuality: 0.92) {
+      return .image(jpeg, filename: "photo.jpg", mimeType: "image/jpeg")
+    }
+    if let data = item as? Data, let image = UIImage(data: data),
+       let jpeg = image.jpegData(compressionQuality: 0.92) {
+      return .image(jpeg, filename: "photo.jpg", mimeType: "image/jpeg")
+    }
+    return nil
   }
 
   // MARK: - Save
 
-  private func save(url: URL?, text: String?) {
+  private func save(_ payload: SharedPayload?) {
     let defaults = UserDefaults(suiteName: appGroup)
     guard
       let instanceUrl = defaults?.string(forKey: "instanceUrl"), !instanceUrl.isEmpty,
@@ -87,22 +150,33 @@ class ShareViewController: UIViewController {
       return
     }
 
-    // Shared text that is itself a bare link is treated as a URL save.
-    var body: [String: String] = [:]
-    if let url {
-      body["url"] = url.absoluteString
-    } else if let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-      if let asURL = URL(string: text), let scheme = asURL.scheme,
-         ["http", "https"].contains(scheme.lowercased()) {
-        body["url"] = text
-      } else {
-        body["note"] = text
-      }
-    } else {
+    guard let payload else {
       finish(success: false, message: "Nothing shareable found.")
       return
     }
 
+    switch payload {
+    case .image(let data, let filename, let mimeType):
+      uploadImage(data: data, filename: filename, mimeType: mimeType, instanceUrl: instanceUrl, token: token)
+    case .url(let url):
+      postItem(body: ["url": url.absoluteString], instanceUrl: instanceUrl, token: token)
+    case .text(let text):
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else {
+        finish(success: false, message: "Nothing shareable found.")
+        return
+      }
+      // Shared text that is itself a bare link is treated as a URL save.
+      if let asURL = URL(string: trimmed), let scheme = asURL.scheme,
+         ["http", "https"].contains(scheme.lowercased()) {
+        postItem(body: ["url": trimmed], instanceUrl: instanceUrl, token: token)
+      } else {
+        postItem(body: ["note": trimmed], instanceUrl: instanceUrl, token: token)
+      }
+    }
+  }
+
+  private func postItem(body: [String: String], instanceUrl: String, token: String) {
     guard let endpoint = URL(string: "\(instanceUrl)/api/items"),
           let payload = try? JSONSerialization.data(withJSONObject: body)
     else {
@@ -116,7 +190,38 @@ class ShareViewController: UIViewController {
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "content-type")
     request.timeoutInterval = 15
+    send(request)
+  }
 
+  private func uploadImage(data: Data, filename: String, mimeType: String, instanceUrl: String, token: String) {
+    guard let endpoint = URL(string: "\(instanceUrl)/api/assets") else {
+      finish(success: false, message: "Invalid instance URL.")
+      return
+    }
+
+    let boundary = "Boundary-\(UUID().uuidString)"
+    var body = Data()
+    let safeName = filename.replacingOccurrences(of: "\"", with: "")
+    body.append("--\(boundary)\r\n".data(using: .utf8)!)
+    body.append(
+      "Content-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\n"
+        .data(using: .utf8)!
+    )
+    body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+    body.append(data)
+    body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+    var request = URLRequest(url: endpoint)
+    request.httpMethod = "POST"
+    request.httpBody = body
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    // Photos can be large; give the extension a bit more runway than text saves.
+    request.timeoutInterval = 45
+    send(request)
+  }
+
+  private func send(_ request: URLRequest) {
     let session = URLSession(configuration: .ephemeral)
     session.dataTask(with: request) { [weak self] _, response, error in
       DispatchQueue.main.async {
@@ -130,6 +235,8 @@ class ShareViewController: UIViewController {
           self?.finish(success: true, message: "Saved")
         case 401:
           self?.finish(success: false, message: "Token rejected — reconnect in the app.")
+        case 415:
+          self?.finish(success: false, message: "That image format isn't supported.")
         default:
           self?.finish(success: false, message: "Save failed (HTTP \(status)).")
         }

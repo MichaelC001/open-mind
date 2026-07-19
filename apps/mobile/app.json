@@ -37,7 +37,11 @@
         "expo-share-intent",
         {
           "androidIntentFilters": [
-            "text/*"
+            "text/*",
+            "image/*"
+          ],
+          "androidMultiIntentFilters": [
+            "image/*"
           ],
           "disableIOS": true,
           "disableExperimental": true
@@ -50,6 +54,13 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Allow Openmind to centre the places map on your location."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Openmind to save photos from your library.",
+          "cameraPermission": "Allow Openmind to take a photo to save."
         }
       ]
     ],

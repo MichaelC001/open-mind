@@ -1,8 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { Link, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -13,7 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PressScale } from "@/components/PressScale";
-import { listItems, saveItem } from "@/lib/api";
+import { listItems, saveItem, uploadAsset, type AssetUpload } from "@/lib/api";
 import { useCaptureQueue } from "@/lib/capture-queue-context";
 import { useInvalidateLists } from "@/lib/mutations";
 import { useSettingsContext } from "@/lib/settings-context";
@@ -25,10 +27,10 @@ const CLOCK_SKEW_MS = 30 * 1000;
 type Status =
   | { kind: "idle" }
   | { kind: "saving" }
-  | { kind: "saved"; recovered?: boolean }
+  | { kind: "saved"; recovered?: boolean; count?: number }
   | { kind: "queued" }
   | { kind: "rejected" }
-  | { kind: "error" };
+  | { kind: "error"; message?: string };
 
 // After a status-0 (network error/timeout) response, the POST may have
 // actually landed. For URL saves we can check: list the newest items and look
@@ -47,11 +49,50 @@ async function wasRecentlySaved(url: string, attemptStartedAt: number): Promise<
   });
 }
 
+function guessName(uri: string, fallback: string): string {
+  const cleaned = uri.split("?")[0] ?? uri;
+  const base = cleaned.split("/").pop();
+  if (base && /\.[a-z0-9]+$/i.test(base)) return base;
+  return fallback;
+}
+
+function assetFromPicker(asset: ImagePicker.ImagePickerAsset): AssetUpload {
+  const mime = asset.mimeType ?? "image/jpeg";
+  const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
+  return {
+    uri: asset.uri,
+    name: asset.fileName ?? guessName(asset.uri, `photo.${ext}`),
+    type: mime,
+  };
+}
+
+function parseSharedImages(raw: string | undefined): AssetUpload[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((row): row is AssetUpload => {
+      if (!row || typeof row !== "object") return false;
+      const r = row as AssetUpload;
+      return typeof r.uri === "string" && r.uri.length > 0;
+    }).map((row) => ({
+      uri: row.uri,
+      name: typeof row.name === "string" && row.name ? row.name : guessName(row.uri, "photo.jpg"),
+      type:
+        typeof row.type === "string" && row.type.startsWith("image/")
+          ? row.type
+          : "image/jpeg",
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export default function CaptureScreen() {
   const { configured, loading } = useSettingsContext();
   const { pendingCount, flushing, enqueue, flush } = useCaptureQueue();
   const invalidateLists = useInvalidateLists();
-  const params = useLocalSearchParams<{ shared?: string }>();
+  const params = useLocalSearchParams<{ shared?: string; sharedImages?: string }>();
   const [text, setText] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [focused, setFocused] = useState(false);
@@ -67,6 +108,64 @@ export default function CaptureScreen() {
       setStatus({ kind: "idle" });
     }
   }, [params.shared]);
+
+  const uploadFiles = useCallback(
+    async (files: AssetUpload[]) => {
+      if (files.length === 0) return;
+      setStatus({ kind: "saving" });
+      let saved = 0;
+      let lastStatus = 0;
+      for (const file of files) {
+        const res = await uploadAsset(file);
+        lastStatus = res.status;
+        if (res.ok) {
+          saved += 1;
+        } else if (res.status === 401) {
+          setStatus({ kind: "rejected" });
+          return;
+        } else if (res.status === 0) {
+          setStatus({
+            kind: "error",
+            message: "Couldn't upload — check your connection and try again.",
+          });
+          if (saved > 0) invalidateLists();
+          return;
+        } else if (res.status === 415) {
+          setStatus({
+            kind: "error",
+            message: "That format isn't supported — try JPEG, PNG, WebP, or GIF.",
+          });
+          if (saved > 0) invalidateLists();
+          return;
+        } else {
+          setStatus({ kind: "error", message: "Couldn't save photo — try again." });
+          if (saved > 0) invalidateLists();
+          return;
+        }
+      }
+      if (saved > 0) {
+        setStatus({ kind: "saved", count: saved });
+        invalidateLists();
+      } else {
+        setStatus({
+          kind: "error",
+          message: lastStatus ? `Couldn't save photo (HTTP ${lastStatus}).` : "Couldn't save photo — try again.",
+        });
+      }
+    },
+    [invalidateLists],
+  );
+
+  // Shared images from Android SEND intents land here as JSON and upload immediately.
+  const appliedImagesRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const raw = typeof params.sharedImages === "string" ? params.sharedImages : undefined;
+    if (!raw || raw === appliedImagesRef.current) return;
+    appliedImagesRef.current = raw;
+    const files = parseSharedImages(raw);
+    if (files.length === 0) return;
+    void uploadFiles(files);
+  }, [params.sharedImages, uploadFiles]);
 
   useFocusEffect(
     useCallback(() => {
@@ -108,6 +207,36 @@ export default function CaptureScreen() {
     }
   }
 
+  async function pickFromLibrary() {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Photos permission needed", "Allow photo access in Settings to save images.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.92,
+      allowsMultipleSelection: true,
+      selectionLimit: 10,
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    await uploadFiles(result.assets.map(assetFromPicker));
+  }
+
+  async function takePhoto() {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Camera permission needed", "Allow camera access in Settings to take a photo.");
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      quality: 0.92,
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    await uploadFiles(result.assets.map(assetFromPicker));
+  }
+
   async function onSyncNow() {
     const result = await flush();
     if (result.sent > 0) {
@@ -126,7 +255,7 @@ export default function CaptureScreen() {
       >
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>Capture</Text>
-          <Text style={styles.subtitle}>Save a link or a note — enriches in place</Text>
+          <Text style={styles.subtitle}>Save a link, note, or photo — enriches in place</Text>
 
           {loading ? null : configured ? (
             <>
@@ -171,15 +300,31 @@ export default function CaptureScreen() {
                 </View>
               </View>
 
+              <View style={styles.field}>
+                <Text style={styles.label}>PHOTO</Text>
+                <View style={styles.photoRow}>
+                  <PressScale onPress={pickFromLibrary} disabled={saving} style={styles.photoPress}>
+                    <View style={[styles.photoButton, saving && styles.buttonDisabled]}>
+                      <Ionicons name="images-outline" size={18} color={colors.cobalt} />
+                      <Text style={styles.photoButtonText}>Choose photo</Text>
+                    </View>
+                  </PressScale>
+                  {Platform.OS !== "web" ? (
+                    <PressScale onPress={takePhoto} disabled={saving} style={styles.photoPress}>
+                      <View style={[styles.photoButton, saving && styles.buttonDisabled]}>
+                        <Ionicons name="camera-outline" size={18} color={colors.cobalt} />
+                        <Text style={styles.photoButtonText}>Take photo</Text>
+                      </View>
+                    </PressScale>
+                  ) : null}
+                </View>
+              </View>
+
               <StatusMessage status={status} />
 
               <PressScale onPress={onSave} disabled={!canSave}>
                 <View style={[styles.primaryButton, !canSave && styles.buttonDisabled]}>
-                  {saving ? (
-                    <ActivityIndicator color={colors.paper} />
-                  ) : (
-                    <Text style={styles.primaryButtonText}>Save</Text>
-                  )}
+                  <Text style={styles.primaryButtonText}>Save</Text>
                 </View>
               </PressScale>
             </>
@@ -201,12 +346,23 @@ export default function CaptureScreen() {
 
 function StatusMessage({ status }: { status: Status }) {
   switch (status.kind) {
+    case "saving":
+      return (
+        <View style={styles.savedRow}>
+          <ActivityIndicator color={colors.cobalt} size="small" />
+          <Text style={[styles.status, { color: colors.inkMuted }]}>Saving…</Text>
+        </View>
+      );
     case "saved":
       return (
         <View style={styles.savedRow}>
           <Ionicons name="checkmark-circle" size={16} color={colors.cobalt} />
           <Text style={[styles.status, { color: colors.cobalt }]}>
-            {status.recovered ? "Saved — connection was slow." : "Saved — it'll appear in your Library."}
+            {status.recovered
+              ? "Saved — connection was slow."
+              : status.count && status.count > 1
+                ? `Saved ${status.count} photos — they'll appear in your Library.`
+                : "Saved — it'll appear in your Library."}
           </Text>
         </View>
       );
@@ -222,7 +378,11 @@ function StatusMessage({ status }: { status: Status }) {
     case "rejected":
       return <Text style={[styles.status, { color: colors.danger }]}>Token rejected — check Settings.</Text>;
     case "error":
-      return <Text style={[styles.status, { color: colors.danger }]}>Couldn't save — try again.</Text>;
+      return (
+        <Text style={[styles.status, { color: colors.danger }]}>
+          {status.message ?? "Couldn't save — try again."}
+        </Text>
+      );
     default:
       return null;
   }
@@ -291,6 +451,21 @@ const styles = StyleSheet.create({
     minHeight: 120,
   },
   inputFocused: { borderColor: colors.cobalt, borderWidth: 1.5 },
+  photoRow: { flexDirection: "row", gap: spacing.sm },
+  photoPress: { flex: 1 },
+  photoButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.xs,
+    backgroundColor: colors.paper,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.button,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+  },
+  photoButtonText: { fontFamily: fonts.sansSemiBold, fontSize: 13, color: colors.cobalt },
   savedRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginBottom: spacing.md },
   status: { fontFamily: fonts.sans, fontSize: 13, marginBottom: spacing.md, flexShrink: 1 },
   primaryButton: {

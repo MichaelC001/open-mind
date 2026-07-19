@@ -10,6 +10,9 @@
 - (see Issues)
 
 ## Later
+- Mobile: offline queue for photo uploads (copy into app storage, flush via
+  `POST /api/assets`) — share extension + in-app Capture currently online-only
+  for images
 - Reel places Phase 4: optional yt-dlp deep media — see
   `docs/superpowers/specs/20260716-reel-places-design.md`
 - Reel places Phase 3 leftover: MCP `item_places` tool
@@ -22,6 +25,9 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Mobile: save images from phone — Capture Choose/Take photo, Android
+  `image/*` share intent, iOS share extension multipart upload to `/api/assets`,
+  item detail shows lead image (2026-07-19)
 - Android release prep: `app.config.js` injects the Maps Android key from
   `GOOGLE_MAPS_ANDROID_API_KEY` (EAS Preview env, out of git), `preview`
   APK/internal profile; first Android build shipped as a sideload APK for a

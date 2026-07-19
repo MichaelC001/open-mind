@@ -10,6 +10,7 @@ import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Linking,
   Platform,
   Pressable,
@@ -26,8 +27,29 @@ import { ApiError, getItem, getItemPlaces, sendItemToKindle, type ItemDetail, ty
 import { cardKind } from "@/lib/cards";
 import { useDeleteItem, useKeepItem, usePinItem } from "@/lib/mutations";
 import { queryKeys } from "@/lib/query";
+import { useSettingsContext } from "@/lib/settings-context";
+import type { Settings } from "@/lib/settings";
 import { colors, fonts, radius, spacing, typeGradients, type CardKind } from "@/lib/theme";
 import { stripMarkdown } from "@/lib/text";
+
+/**
+ * Resolve an item's leadImageUrl into an <Image> source. Instance-relative
+ * `/assets/<id>` paths need the instance URL + bearer header.
+ */
+function leadImageSource(
+  leadImageUrl: string | undefined,
+  settings: Settings | null,
+): { uri: string; headers?: Record<string, string> } | undefined {
+  if (!leadImageUrl) return undefined;
+  if (leadImageUrl.startsWith("/assets/")) {
+    if (!settings) return undefined;
+    return {
+      uri: `${settings.instanceUrl}${leadImageUrl}`,
+      headers: { Authorization: `Bearer ${settings.token}` },
+    };
+  }
+  return { uri: leadImageUrl };
+}
 
 /** Types that get a gradient hero wash on the detail screen. */
 const HERO_KINDS: readonly CardKind[] = ["article", "image", "product", "book", "recipe", "video", "tweet"];
@@ -56,6 +78,7 @@ function PaletteDots({ dots }: { dots: string[] }) {
 export default function ItemScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { settings } = useSettingsContext();
   const pinItem = usePinItem();
   const keepItem = useKeepItem();
   const deleteItemFn = useDeleteItem();
@@ -191,6 +214,7 @@ export default function ItemScreen() {
             : null
         }
         item={item}
+        settings={settings}
         places={placesQuery.data ?? []}
         onCopyLink={onCopyLink}
         onShare={onShare}
@@ -267,6 +291,7 @@ function Body({
   isPending,
   error,
   item,
+  settings,
   places,
   onCopyLink,
   onShare,
@@ -276,6 +301,7 @@ function Body({
   isPending: boolean;
   error: string | null;
   item?: ItemDetail;
+  settings: Settings | null;
   places: Place[];
   onCopyLink: () => void;
   onShare: () => void;
@@ -308,6 +334,7 @@ function Body({
     .split(/\n{2,}/)
     .map((p) => stripMarkdown(p))
     .filter(Boolean);
+  const imageSrc = leadImageSource(item.leadImageUrl, settings);
 
   if (kind === "quote") {
     return (
@@ -334,7 +361,11 @@ function Body({
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      {showHero ? (
+      {imageSrc ? (
+        <View style={styles.heroImageWrap}>
+          <Image source={imageSrc} style={styles.heroImage} resizeMode="cover" accessibilityLabel={title || "Saved image"} />
+        </View>
+      ) : showHero ? (
         <View style={styles.hero}>
           <LinearGradient colors={gradientColors} style={StyleSheet.absoluteFill} />
         </View>
@@ -359,7 +390,7 @@ function Body({
             </Text>
           ))}
         </View>
-      ) : (
+      ) : kind === "image" && imageSrc ? null : (
         <Text style={styles.noBody}>
           No archived text for this item{item.status === "pending" ? " yet — still enriching" : ""}.
         </Text>
@@ -437,6 +468,17 @@ const styles = StyleSheet.create({
     borderRadius: radius.card,
     overflow: "hidden",
     marginBottom: spacing.lg,
+  },
+  heroImageWrap: {
+    borderRadius: radius.card,
+    overflow: "hidden",
+    marginBottom: spacing.lg,
+    backgroundColor: colors.canvas,
+  },
+  heroImage: {
+    width: "100%",
+    aspectRatio: 4 / 3,
+    backgroundColor: colors.canvas,
   },
   kicker: {
     fontFamily: fonts.mono,
