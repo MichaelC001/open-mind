@@ -3,8 +3,11 @@
 // sign the Clerk session back out (the app never keeps a live Clerk session;
 // the minted key is the only credential it stores), then persist it exactly
 // like a manual Settings save. Self-hosters who haven't configured Clerk (no
-// publishable key) only ever see the manual fallback below. Never log the
-// Clerk token or the omk_ key.
+// publishable key) only ever see the manual fallback below. The top-level
+// screen never calls a Clerk hook — those live in ClerkSignIn, which only
+// mounts when a publishable key is configured, so there's no ClerkProvider
+// to violate the Rules of Hooks against. Never log the Clerk token or the
+// omk_ key.
 import type { EmailCodeFactor, SignInFirstFactor } from "@clerk/types";
 import { useAuth, useSignIn, useSSO } from "@clerk/clerk-expo";
 import * as AuthSession from "expo-auth-session";
@@ -37,6 +40,35 @@ function isEmailCodeFactor(factor: SignInFirstFactor): factor is EmailCodeFactor
 }
 
 export default function SignInScreen() {
+  return (
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+          <Text style={styles.title}>Openmind</Text>
+          <Text style={styles.subtitle}>Save anything. Find it by fragments.</Text>
+
+          {clerkPublishableKey ? (
+            <ClerkSignIn />
+          ) : (
+            <Text style={styles.message}>
+              This build isn't set up for Clerk sign-in. Connect a different instance or enter a
+              device-connect code below.
+            </Text>
+          )}
+
+          <Link href="/settings" style={styles.link}>
+            Connect a different instance or enter a code
+          </Link>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+// Only rendered when clerkPublishableKey is truthy — i.e. only ever mounted
+// under a live ClerkProvider — so it's safe for this component (and only
+// this component) to call Clerk hooks.
+function ClerkSignIn() {
   const router = useRouter();
   const { save } = useSettingsContext();
   const { getToken, signOut } = useAuth();
@@ -52,7 +84,6 @@ export default function SignInScreen() {
   const [focused, setFocused] = useState<"email" | "code" | null>(null);
 
   const busy = pending !== null;
-  const clerkEnabled = !!clerkPublishableKey;
 
   // Shared post-Clerk step: exchange the fresh Clerk session token for a
   // durable omk_ key, drop the Clerk session (it's no longer needed), and
@@ -61,6 +92,7 @@ export default function SignInScreen() {
     setPending("connecting");
     const token = await getToken();
     if (!token) {
+      await signOut();
       setError(GENERIC_CONNECT_ERROR);
       setPending(null);
       return;
@@ -170,111 +202,92 @@ export default function SignInScreen() {
     setError(null);
   }
 
+  if (pending === "connecting") {
+    return (
+      <View style={styles.centre}>
+        <ActivityIndicator color={colors.cobalt} />
+        <Text style={[styles.message, styles.centreText]}>Connecting…</Text>
+      </View>
+    );
+  }
+
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-          <Text style={styles.title}>Openmind</Text>
-          <Text style={styles.subtitle}>Save anything. Find it by fragments.</Text>
-
-          {pending === "connecting" ? (
-            <View style={styles.centre}>
-              <ActivityIndicator color={colors.cobalt} />
-              <Text style={[styles.message, styles.centreText]}>Connecting…</Text>
-            </View>
-          ) : clerkEnabled ? (
-            <>
-              <PressScale onPress={onGoogle} disabled={busy}>
-                <View style={styles.primaryButton}>
-                  {pending === "google" ? (
-                    <ActivityIndicator color={colors.paper} />
-                  ) : (
-                    <Text style={styles.primaryButtonText}>Continue with Google</Text>
-                  )}
-                </View>
-              </PressScale>
-
-              <Text style={styles.divider}>OR SIGN IN WITH EMAIL</Text>
-
-              {emailStep === "email" ? (
-                <View style={styles.field}>
-                  <View style={styles.inputCard}>
-                    <TextInput
-                      style={[styles.input, focused === "email" && styles.inputFocused]}
-                      value={email}
-                      onChangeText={setEmail}
-                      onFocus={() => setFocused("email")}
-                      onBlur={() => setFocused(null)}
-                      placeholder="you@example.com"
-                      placeholderTextColor={colors.inkFaint}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      keyboardType="email-address"
-                      inputMode="email"
-                      editable={!busy}
-                    />
-                  </View>
-                  <ErrorMessage message={error} />
-                  <PressScale onPress={onSendCode} disabled={busy}>
-                    <View style={styles.secondaryButton}>
-                      {pending === "email-request" ? (
-                        <ActivityIndicator color={colors.cobalt} />
-                      ) : (
-                        <Text style={styles.secondaryButtonText}>Send code</Text>
-                      )}
-                    </View>
-                  </PressScale>
-                </View>
-              ) : (
-                <View style={styles.field}>
-                  <Text style={styles.sectionHint}>Enter the code sent to {email.trim()}.</Text>
-                  <View style={styles.inputCard}>
-                    <TextInput
-                      style={[styles.input, focused === "code" && styles.inputFocused]}
-                      value={code}
-                      onChangeText={setCode}
-                      onFocus={() => setFocused("code")}
-                      onBlur={() => setFocused(null)}
-                      placeholder="123456"
-                      placeholderTextColor={colors.inkFaint}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      keyboardType="number-pad"
-                      editable={!busy}
-                    />
-                  </View>
-                  <ErrorMessage message={error} />
-                  <PressScale onPress={onVerifyCode} disabled={busy}>
-                    <View style={styles.secondaryButton}>
-                      {pending === "email-verify" ? (
-                        <ActivityIndicator color={colors.cobalt} />
-                      ) : (
-                        <Text style={styles.secondaryButtonText}>Verify code</Text>
-                      )}
-                    </View>
-                  </PressScale>
-                  <Pressable onPress={onChangeEmail} disabled={busy} hitSlop={8}>
-                    <Text style={styles.link}>Use a different email</Text>
-                  </Pressable>
-                </View>
-              )}
-            </>
+    <>
+      <PressScale onPress={onGoogle} disabled={busy}>
+        <View style={styles.primaryButton}>
+          {pending === "google" ? (
+            <ActivityIndicator color={colors.paper} />
           ) : (
-            <>
-              <ErrorMessage message={error} />
-              <Text style={styles.message}>
-                This build isn't set up for Clerk sign-in. Connect a different instance or enter a
-                device-connect code below.
-              </Text>
-            </>
+            <Text style={styles.primaryButtonText}>Continue with Google</Text>
           )}
+        </View>
+      </PressScale>
 
-          <Link href="/settings" style={styles.link}>
-            Connect a different instance or enter a code
-          </Link>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+      <Text style={styles.divider}>OR SIGN IN WITH EMAIL</Text>
+
+      {emailStep === "email" ? (
+        <View style={styles.field}>
+          <View style={styles.inputCard}>
+            <TextInput
+              style={[styles.input, focused === "email" && styles.inputFocused]}
+              value={email}
+              onChangeText={setEmail}
+              onFocus={() => setFocused("email")}
+              onBlur={() => setFocused(null)}
+              placeholder="you@example.com"
+              placeholderTextColor={colors.inkFaint}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              inputMode="email"
+              editable={!busy}
+            />
+          </View>
+          <ErrorMessage message={error} />
+          <PressScale onPress={onSendCode} disabled={busy}>
+            <View style={styles.secondaryButton}>
+              {pending === "email-request" ? (
+                <ActivityIndicator color={colors.cobalt} />
+              ) : (
+                <Text style={styles.secondaryButtonText}>Send code</Text>
+              )}
+            </View>
+          </PressScale>
+        </View>
+      ) : (
+        <View style={styles.field}>
+          <Text style={styles.sectionHint}>Enter the code sent to {email.trim()}.</Text>
+          <View style={styles.inputCard}>
+            <TextInput
+              style={[styles.input, focused === "code" && styles.inputFocused]}
+              value={code}
+              onChangeText={setCode}
+              onFocus={() => setFocused("code")}
+              onBlur={() => setFocused(null)}
+              placeholder="123456"
+              placeholderTextColor={colors.inkFaint}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="number-pad"
+              editable={!busy}
+            />
+          </View>
+          <ErrorMessage message={error} />
+          <PressScale onPress={onVerifyCode} disabled={busy}>
+            <View style={styles.secondaryButton}>
+              {pending === "email-verify" ? (
+                <ActivityIndicator color={colors.cobalt} />
+              ) : (
+                <Text style={styles.secondaryButtonText}>Verify code</Text>
+              )}
+            </View>
+          </PressScale>
+          <Pressable onPress={onChangeEmail} disabled={busy} hitSlop={8}>
+            <Text style={styles.link}>Use a different email</Text>
+          </Pressable>
+        </View>
+      )}
+    </>
   );
 }
 

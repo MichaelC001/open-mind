@@ -67,26 +67,34 @@ export default function RootLayout() {
     return <View style={{ flex: 1, backgroundColor: colors.paper }} />;
   }
 
+  const tree = (
+    <QueryProvider>
+      <SettingsProvider>
+        <CaptureQueueProvider>
+          <StatusBar style="dark" />
+          <ShareIntentGate />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: colors.canvas },
+            }}
+          >
+            <Stack.Screen name="(tabs)" />
+          </Stack>
+        </CaptureQueueProvider>
+      </SettingsProvider>
+    </QueryProvider>
+  );
+
   return (
     <SafeAreaProvider>
-      <ClerkProvider publishableKey={clerkPublishableKey ?? ""} tokenCache={tokenCache}>
-        <QueryProvider>
-          <SettingsProvider>
-            <CaptureQueueProvider>
-              <StatusBar style="dark" />
-              <ShareIntentGate />
-              <Stack
-                screenOptions={{
-                  headerShown: false,
-                  contentStyle: { backgroundColor: colors.canvas },
-                }}
-              >
-                <Stack.Screen name="(tabs)" />
-              </Stack>
-            </CaptureQueueProvider>
-          </SettingsProvider>
-        </QueryProvider>
-      </ClerkProvider>
+      {clerkPublishableKey ? (
+        <ClerkProvider publishableKey={clerkPublishableKey} tokenCache={tokenCache}>
+          {tree}
+        </ClerkProvider>
+      ) : (
+        tree
+      )}
     </SafeAreaProvider>
   );
 }
