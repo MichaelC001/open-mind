@@ -13,12 +13,19 @@
 - Reel places Phase 4: optional yt-dlp deep media — see
   `docs/superpowers/specs/20260716-reel-places-design.md`
 - Reel places Phase 3 leftover: MCP `item_places` tool
-- Places map follow-ups: marker clustering, Android Google Maps API key,
+- Places map follow-ups: marker clustering,
   consolidate web Place types via api-client `paths[]`, note OSM tile runtime
   dep in self-hosting docs
+- Android follow-ups: Play Console internal-testing track (auto-updates vs
+  the current sideloaded APK), Android adaptive icon, add Play App Signing
+  SHA-1 to the Maps key restriction if we ship via Play
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Android release prep: `app.config.js` injects the Maps Android key from
+  `GOOGLE_MAPS_ANDROID_API_KEY` (EAS Preview env, out of git), `preview`
+  APK/internal profile; first Android build shipped as a sideload APK for a
+  tester (2026-07-19)
 - Search puts the library first: unkept feed-river matches rank after every
   library match (API partition), with a "From your feeds" divider on web and
   a section header on mobile; FTS/vector mappers now carry feedId/keptAt
