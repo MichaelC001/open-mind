@@ -25,6 +25,11 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Mobile: native Clerk sign-in (Continue with Google + email code) — mints an
+  `omk_` device key from the Clerk session, no web-first hop; self-hoster
+  builds without a key fall back to manual device-key/QR. Needs Clerk dashboard
+  config + `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` (EAS preview) + a new build to
+  go live (2026-07-19)
 - Mobile: save images from phone — Capture Choose/Take photo, Android
   `image/*` share intent, iOS share extension multipart upload to `/api/assets`,
   item detail shows lead image (2026-07-19)
