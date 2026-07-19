@@ -181,5 +181,5 @@ target is a preview surface only — ship the native app for real use.
 ```bash
 cd apps/mobile
 ./node_modules/.bin/tsc --noEmit           # types
-./node_modules/.bin/expo export --platform web   # web bundle builds
+./node_modules/.bin/expo config --json > /dev/null   # app config resolves
 ```

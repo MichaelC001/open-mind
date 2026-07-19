@@ -12,7 +12,7 @@ import type { EmailCodeFactor, SignInFirstFactor } from "@clerk/types";
 import { useAuth, useSignIn, useSSO } from "@clerk/clerk-expo";
 import * as AuthSession from "expo-auth-session";
 import { Link, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -25,11 +25,16 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import * as WebBrowser from "expo-web-browser";
 import { PressScale } from "@/components/PressScale";
 import { mintDeviceKey } from "@/lib/api";
 import { clerkPublishableKey, defaultInstanceUrl } from "@/lib/clerk";
 import { useSettingsContext } from "@/lib/settings-context";
 import { colors, fonts, radius, spacing } from "@/lib/theme";
+
+// Required by Clerk's useSSO flow: without this the in-app browser session
+// used for OAuth may not dismiss/resolve when control returns to the app.
+WebBrowser.maybeCompleteAuthSession();
 
 type Pending = "google" | "email-request" | "email-verify" | "connecting" | null;
 
@@ -85,33 +90,46 @@ function ClerkSignIn() {
 
   const busy = pending !== null;
 
+  // Android-only warm-up for the OAuth browser, per Clerk's useSSO docs —
+  // shaves the cold-start delay off the first "Continue with Google" tap.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    void WebBrowser.warmUpAsync();
+    return () => {
+      void WebBrowser.coolDownAsync();
+    };
+  }, []);
+
   // Shared post-Clerk step: exchange the fresh Clerk session token for a
   // durable omk_ key, drop the Clerk session (it's no longer needed), and
-  // persist the key exactly like a manual Settings save.
-  async function connectAfterClerk() {
+  // persist the key exactly like a manual Settings save. Returns whether the
+  // connect succeeded, so callers whose Clerk sign-in resource is already
+  // consumed (e.g. a spent email code) can react to failure appropriately.
+  async function connectAfterClerk(): Promise<boolean> {
     setPending("connecting");
     const token = await getToken();
     if (!token) {
       await signOut();
       setError(GENERIC_CONNECT_ERROR);
       setPending(null);
-      return;
+      return false;
     }
     const res = await mintDeviceKey(defaultInstanceUrl, token, "Mobile");
     await signOut();
     if (!res.ok || !res.key) {
       setError(GENERIC_CONNECT_ERROR);
       setPending(null);
-      return;
+      return false;
     }
     try {
       await save({ instanceUrl: defaultInstanceUrl, token: res.key });
     } catch {
       setError("Couldn't save to secure storage — try again.");
       setPending(null);
-      return;
+      return false;
     }
     router.replace("/");
+    return true;
   }
 
   async function onGoogle() {
@@ -188,7 +206,16 @@ function ClerkSignIn() {
         return;
       }
       await signInState.setActive({ session: result.createdSessionId });
-      await connectAfterClerk();
+      const connected = await connectAfterClerk();
+      if (!connected) {
+        // The code was already consumed by the verify above, so resubmitting
+        // it will only fail again misleadingly — send the user back to
+        // request a fresh one instead.
+        setEmailStep("email");
+        setCode("");
+        setEmailAddressId(null);
+        setError("Signed in, but couldn't finish connecting. Try again.");
+      }
     } catch {
       setError("That code didn't work — try again.");
       setPending(null);
