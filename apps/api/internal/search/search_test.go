@@ -314,6 +314,74 @@ func TestTagSearchStemsEnglishTags(t *testing.T) {
 	}
 }
 
+// TestSearchRanksLibraryBeforeUnkeptFeed guards the library-first partition:
+// an unkept feed-river item stays searchable but must trail every library
+// match, even when its raw FTS rank is higher. Keeping the item promotes it
+// into the library partition. It also verifies FeedID and KeptAt survive the
+// FTS row-to-item mapping, which historically dropped them.
+func TestSearchRanksLibraryBeforeUnkeptFeed(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	np := ai.NewNoop()
+	userID := uuid.New()
+	if err := s.Queries.EnsureUser(ctx, userID); err != nil {
+		t.Fatalf("ensure user: %v", err)
+	}
+
+	// Library item: a single, weak mention of the query term.
+	saved := seedItem(t, s, np, userID, "starter notes", "notes that mention sourdough once")
+
+	// Feed item: term in title and repeatedly in body, so its ts_rank beats
+	// the library item's — only the partition can put it second.
+	feed, err := s.Queries.CreateFeed(ctx, db.CreateFeedParams{UserID: userID, Url: "https://example.com/feed.xml", Title: "baking feed"})
+	if err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+	riverItem, err := s.Queries.CreateFeedItem(ctx, db.CreateFeedItemParams{UserID: userID, Url: "https://example.com/river-sourdough", FeedID: pgtype.UUID{Bytes: feed.ID, Valid: true}})
+	if err != nil {
+		t.Fatalf("create feed item: %v", err)
+	}
+	if err := s.Queries.UpdateItemExtraction(ctx, db.UpdateItemExtractionParams{
+		UserID: userID, ID: riverItem.ID, Title: "sourdough sourdough",
+		Body: "sourdough sourdough sourdough — everything about sourdough", CardType: "article",
+	}); err != nil {
+		t.Fatalf("update extraction: %v", err)
+	}
+
+	results, err := search.Run(ctx, s, np, userID, "sourdough", "", nil, 10)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2 (feed matches must stay included)", len(results))
+	}
+	if results[0].Item.ID != saved.ID || results[1].Item.ID != riverItem.ID {
+		t.Fatalf("order = [%v %v], want library %v before feed %v",
+			results[0].Item.ID, results[1].Item.ID, saved.ID, riverItem.ID)
+	}
+	if !results[1].Item.FeedID.Valid {
+		t.Error("feed result FeedID invalid, want it carried through the row mapping")
+	}
+
+	// Keeping the feed item moves it into the library partition, where its
+	// stronger match now ranks it first.
+	if _, err := s.Queries.SetItemKept(ctx, db.SetItemKeptParams{
+		UserID: userID, ID: riverItem.ID, KeptAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatalf("set kept: %v", err)
+	}
+	results, err = search.Run(ctx, s, np, userID, "sourdough", "", nil, 10)
+	if err != nil {
+		t.Fatalf("search after keep: %v", err)
+	}
+	if len(results) != 2 || results[0].Item.ID != riverItem.ID {
+		t.Fatalf("after keep, first result = %v, want kept feed item %v", results[0].Item.ID, riverItem.ID)
+	}
+	if !results[0].Item.KeptAt.Valid {
+		t.Error("kept result KeptAt invalid, want it carried through the row mapping")
+	}
+}
+
 func TestHybridTenantIsolation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

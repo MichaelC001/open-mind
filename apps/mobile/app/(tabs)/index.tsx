@@ -36,6 +36,11 @@ function groupByKind(items: Item[]): { kind: CardKind; items: Item[] }[] {
   return KNOWN_KINDS.filter((k) => byKind.has(k)).map((k) => ({ kind: k, items: byKind.get(k)! }));
 }
 
+/** An unkept feed-river item: searchable, but not part of the Mind until kept. */
+function isFeedOnly(item: Item): boolean {
+  return Boolean(item.feedId) && !item.keptAt;
+}
+
 const SEARCH_DEBOUNCE_MS = 300;
 const LIST_LIMIT = 50;
 
@@ -299,11 +304,29 @@ function Body({
     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.cobalt} />
   );
 
+  // Grouped browsing sections by card type; searching sections library
+  // matches ahead of unkept feed-river matches (results arrive in that order
+  // from the API, the header just makes the split visible).
+  let sections: { title: string; data: Item[] }[] | null = null;
   if (grouped) {
-    const sections = groupByKind(items).map(({ kind, items: sectionItems }) => ({
+    sections = groupByKind(items).map(({ kind, items: sectionItems }) => ({
       title: `${typeLabelPlural[kind]} · ${sectionItems.length}`,
       data: sectionItems,
     }));
+  } else if (searching) {
+    const feedMatches = items.filter(isFeedOnly);
+    if (feedMatches.length > 0) {
+      const mindMatches = items.filter((i) => !isFeedOnly(i));
+      sections = [
+        ...(mindMatches.length > 0
+          ? [{ title: `In your Mind · ${mindMatches.length}`, data: mindMatches }]
+          : []),
+        { title: `From your feeds · ${feedMatches.length}`, data: feedMatches },
+      ];
+    }
+  }
+
+  if (sections) {
     return (
       <SectionList
         sections={sections}

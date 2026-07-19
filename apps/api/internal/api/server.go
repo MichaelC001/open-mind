@@ -286,8 +286,10 @@ func (s *Server) ListItems(w http.ResponseWriter, r *http.Request, params ListIt
 }
 
 // SearchItems runs hybrid search (FTS + pgvector, RRF fusion) scoped to the
-// caller and returns ranked results, newest-ranked first. It always returns an
-// array (never null) so clients can rely on the shape.
+// caller and returns ranked results: library items (direct saves and kept feed
+// items) first, unkept feed-river matches trailing, each group by descending
+// fused score. It always returns an array (never null) so clients can rely on
+// the shape.
 func (s *Server) SearchItems(w http.ResponseWriter, r *http.Request, params SearchItemsParams) {
 	var q, color string
 	if params.Q != nil {

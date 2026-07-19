@@ -347,7 +347,7 @@ type Place struct {
 	Lng  *float64           `json:"lng,omitempty"`
 	Name string             `json:"name"`
 
-	// Source which signal produced this place (caption)
+	// Source which signal produced this place (caption or vision)
 	Source string `json:"source"`
 }
 
@@ -366,7 +366,7 @@ type PlaceWithItem struct {
 	Lng          *float64           `json:"lng,omitempty"`
 	Name         string             `json:"name"`
 
-	// Source which signal produced this place (caption)
+	// Source which signal produced this place (caption or vision)
 	Source string `json:"source"`
 }
 

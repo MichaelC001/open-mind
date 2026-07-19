@@ -19,6 +19,10 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Search puts the library first: unkept feed-river matches rank after every
+  library match (API partition), with a "From your feeds" divider on web and
+  a section header on mobile; FTS/vector mappers now carry feedId/keptAt
+  (2026-07-19)
 - Colour-search discovery: clickable palette dots (cards + item rail) run a
   colour search, one-time hint on the search-by-colour strip, colour-aware
   empty state; mobile tap-a-dot Library colour filter (next dev build) —
