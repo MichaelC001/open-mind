@@ -1,17 +1,16 @@
 import { tokens } from "@openmind/ui";
 import { Shell } from "../../components/Shell";
-import { PlacesMap, type MapPlace } from "../../components/PlacesMap";
+import { PlacesMap } from "../../components/PlacesMap";
 import { apiFetch } from "../../lib/api";
+import type { MapPlace } from "../../lib/types";
 
 const { color, font } = tokens;
 
-type PlaceWithItem = MapPlace & { hint: string; source: string; itemCardType: string };
-
-async function getPlaces(): Promise<PlaceWithItem[]> {
+async function getPlaces(): Promise<MapPlace[]> {
   try {
     const res = await apiFetch("/places");
     if (!res.ok) return [];
-    return ((await res.json()) as PlaceWithItem[]) ?? [];
+    return ((await res.json()) as MapPlace[]) ?? [];
   } catch {
     return [];
   }
