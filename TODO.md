@@ -28,13 +28,15 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
-- Places marker clustering — web (native MapLibre GeoJSON clustering, HTML
-  count markers, no new dep) + mobile (supercluster behind a pure tested
-  `lib/cluster.ts`); tap a cluster to zoom-and-expand, single pins keep their
-  popup/callout. Also derived the web Places type from the api-client contract.
-  Both platforms share supercluster (radius 50, maxZoom 14). Needs web dev +
-  iOS build for a visual pass (2026-07-21)
-- Mobile: offline photo queue (PR #44) — in-app Capture + Android share intents
+- Places marker clustering (PR #45, merged) — web (native MapLibre GeoJSON
+  clustering, HTML count markers, no new dep) + mobile (supercluster behind a
+  pure tested `lib/cluster.ts`); tap a cluster to zoom-and-expand, single pins
+  keep their popup/callout. Also derived the web Places type from the api-client
+  contract. Both platforms share supercluster (radius 50, maxZoom 14). A
+  comprehensive PR review added review fixes (CI-only GeoJSON type resolution,
+  NaN-safe zoom, guarded cluster taps, cluster a11y, typed supercluster union).
+  Needs web dev + iOS build for a visual pass (2026-07-21)
+- Mobile: offline photo queue (PR #44, merged) — in-app Capture + Android share intents
   enqueue images on network error and flush via `POST /api/assets`; images
   persisted to a durable `expo-file-system` dir (never lost to an ephemeral
   URI); iOS native share extension persists failed shares to the App Group
