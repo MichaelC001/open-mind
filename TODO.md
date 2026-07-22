@@ -18,6 +18,12 @@
 - Reel places Phase 4: optional yt-dlp deep media — see
   `docs/superpowers/specs/20260716-reel-places-design.md`
 - Reel places Phase 3 leftover: MCP `item_places` tool
+- Mobile overdrive follow-ups (PR #46): on-device pass — confirm the floating
+  Liquid Glass tab bar doesn't obscure the last Library/Feed/Desk row (add
+  bottom content inset if react-native-screens doesn't auto-adjust); verify
+  Android tab icons + reduce-motion morph skip; consider a true image-hero morph
+  (fly the lead image + match the 4:3 detail hero height, vs today's gradient
+  cross-fade)
 - Places map follow-ups: note OSM tile runtime dep in self-hosting docs;
   clustering polish — keyboard-accessible web cluster markers (currently
   pointer-only), and (optional) truer mobile zoom mapping using viewport width
@@ -28,6 +34,13 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Mobile overdrive: cinematic card→detail morph + native Liquid Glass tab bar
+  (PR #46, merged) — Reanimated 4 spring morphs a card's gradient hero into the
+  detail hero (reduce-motion + hero-kinds gated; quote/note navigate plainly);
+  tab bar switched to expo-router Native Tabs so iOS 26 adopts UIGlassEffect
+  automatically (minimize-on-scroll, cobalt tint, SF Symbols + Ionicon Android
+  parity). Calm fade is now the house detail transition. Verified on an iOS 26.5
+  sim; needs a fresh native build + on-device follow-ups below (2026-07-22)
 - Places marker clustering (PR #45, merged) — web (native MapLibre GeoJSON
   clustering, HTML count markers, no new dep) + mobile (supercluster behind a
   pure tested `lib/cluster.ts`); tap a cluster to zoom-and-expand, single pins
