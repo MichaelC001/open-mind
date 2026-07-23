@@ -58,6 +58,10 @@ type Provider interface {
 	// (and optionally the caption) visible in a video thumbnail. Text-only
 	// providers return ErrNotSupported; an empty image yields an empty list.
 	ExtractPlacesVision(ctx context.Context, title, caption string, image []byte) ([]Place, error)
+	// ExtractPlacesVisionFrames returns places grounded in on-screen text
+	// across several sampled video frames, read in one batched call. Text-only
+	// providers return ErrNotSupported; empty frames yield an empty list.
+	ExtractPlacesVisionFrames(ctx context.Context, title, caption string, frames [][]byte) ([]Place, error)
 }
 
 // parseQueryInstruction is the shared system prompt for natural-language query
@@ -90,6 +94,17 @@ const extractPlacesVisionInstruction = `You extract real-world, visitable places
 	`Return only specific named places a person could visit (cafes, restaurants, bars, hotels, shops, landmarks, parks, museums). ` +
 	`Never invent places from vibes, cuisine cues, or scenery alone; if no place name is readable, return an empty list. ` +
 	`For each place set "hint" to any city/area/country visible in the image or caption (or "" if none), and "confidence" to a number from 0 to 1 reflecting how clearly the name appears. ` +
+	`Respond with only a JSON object of the form {"places": [{"name": string, "hint": string, "confidence": number}]}.`
+
+// extractPlacesFramesInstruction is the shared system prompt for batched
+// multi-frame vision place extraction. Places must be grounded in readable
+// on-screen text across the sampled frames, not inferred from scenery.
+const extractPlacesFramesInstruction = `You extract real-world, visitable places from several frames sampled from one social-media video. ` +
+	`Read on-screen text overlays and any place names visible across the frames; use the optional title/caption only to disambiguate a name you can already see. ` +
+	`Return only specific named places a person could visit (cafes, restaurants, bars, hotels, shops, landmarks, parks, museums). ` +
+	`Never invent places from vibes, cuisine cues, or scenery alone; if no place name is readable, return an empty list. ` +
+	`Deduplicate places that appear in multiple frames. ` +
+	`For each place set "hint" to any city/area/country visible (or "" if none), and "confidence" to a number from 0 to 1. ` +
 	`Respond with only a JSON object of the form {"places": [{"name": string, "hint": string, "confidence": number}]}.`
 
 // placesResponseSchema fields shared by caption and vision JSON-mode calls.
@@ -141,52 +156,51 @@ func sanitisePlaces(in []Place) []Place {
 // Placed is a Place tagged with which signal produced (or won) it.
 type Placed struct {
 	Place
-	Source string // "caption" or "vision"
+	Source string // "location", "caption", "video", or "vision"
 }
 
-// MergePlacesWithSource combines caption- and vision-sourced candidates by
-// normalised name, keeping the higher-confidence row and the winning signal
-// name for item_places.source. On a confidence tie, caption wins (text is the
-// cheaper, more grounded signal). Missing confidence (0) gets a source
-// default: 0.85 for caption, 0.7 for vision.
-func MergePlacesWithSource(caption, vision []Place) []Placed {
-	type tagged struct {
-		Place
-		source string
-	}
-	byName := make(map[string]tagged, len(caption)+len(vision))
-	order := make([]string, 0, len(caption)+len(vision))
+// PlaceGroup is one source's candidates plus the source label and the
+// confidence to assume when a candidate carries none (0).
+type PlaceGroup struct {
+	Places      []Place
+	Source      string
+	DefaultConf float64
+}
 
-	add := func(p Place, source string, defaultConf float64) {
-		if p.Confidence == 0 {
-			p.Confidence = defaultConf
-		}
-		key := strings.ToLower(strings.TrimSpace(p.Name))
-		if key == "" {
-			return
-		}
-		cur, ok := byName[key]
-		if !ok {
-			byName[key] = tagged{Place: p, source: source}
-			order = append(order, key)
-			return
-		}
-		if p.Confidence > cur.Confidence {
-			byName[key] = tagged{Place: p, source: source}
+// MergePlaces combines candidate groups by normalised name, keeping the
+// highest-confidence candidate and its source. Ties are broken by group order
+// (earlier group wins), so callers pass groups in precedence order. First-seen
+// name order is preserved in the result.
+func MergePlaces(groups ...PlaceGroup) []Placed {
+	n := 0
+	for _, g := range groups {
+		n += len(g.Places)
+	}
+	byName := make(map[string]Placed, n)
+	order := make([]string, 0, n)
+	for _, g := range groups {
+		for _, p := range g.Places {
+			if p.Confidence == 0 {
+				p.Confidence = g.DefaultConf
+			}
+			key := strings.ToLower(strings.TrimSpace(p.Name))
+			if key == "" {
+				continue
+			}
+			cur, ok := byName[key]
+			if !ok {
+				byName[key] = Placed{Place: p, Source: g.Source}
+				order = append(order, key)
+				continue
+			}
+			if p.Confidence > cur.Confidence {
+				byName[key] = Placed{Place: p, Source: g.Source}
+			}
 		}
 	}
-
-	for _, p := range caption {
-		add(p, "caption", 0.85)
-	}
-	for _, p := range vision {
-		add(p, "vision", 0.7)
-	}
-
 	out := make([]Placed, 0, len(order))
 	for _, key := range order {
-		t := byName[key]
-		out = append(out, Placed{Place: t.Place, Source: t.source})
+		out = append(out, byName[key])
 	}
 	return out
 }
