@@ -34,6 +34,15 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Default all clients to the hosted instance (PR #48, merged) — mobile, dock,
+  extension, and web now point at `openmind.gilla.fun` (+ its Clerk) out of the
+  box, each as a fallback on the existing env var so self-host overrides still
+  work. Mobile/web bake the public Clerk publishable key (secret key stays
+  env-only); web auth mode defaults to clerk with the key threaded through
+  ClerkProvider + clerkMiddleware; dock/extension pre-fill the instance URL. The
+  web Dockerfile + docker-compose pin `NEXT_PUBLIC_AUTH_MODE=token` so stock
+  `docker compose up` still works without Clerk keys. Self-host smoothing is a
+  deliberate later follow-up (2026-07-23)
 - Mobile overdrive: cinematic card→detail morph + native Liquid Glass tab bar
   (PR #46, merged) — Reanimated 4 spring morphs a card's gradient hero into the
   detail hero (reduce-motion + hero-kinds gated; quote/note navigate plainly);
