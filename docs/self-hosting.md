@@ -192,6 +192,30 @@ default) its thumbnail. Set `REEL_MEDIA` to control the vision ladder:
 warning and behaves as `thumbnail`. These binaries are never bundled and never
 a `docker compose` requirement.
 
+**Using `REEL_MEDIA=video` with the official API image**: the default
+`apps/api/Dockerfile` build does not include yt-dlp/ffmpeg — the image stays
+lean for everyone who doesn't need deep media. To get a variant with them
+installed, build with the `INSTALL_REEL_MEDIA` build arg:
+
+```bash
+docker build --build-arg INSTALL_REEL_MEDIA=true -t openmind-api:video apps/api
+```
+
+With `docker compose`, add the build arg under the `api` service:
+
+```yaml
+services:
+  api:
+    build:
+      context: apps/api
+      args:
+        INSTALL_REEL_MEDIA: "true"
+```
+
+Then set `REEL_MEDIA=video` in the environment as usual. The opt-in build
+installs ffmpeg (ffprobe comes bundled with it) and yt-dlp; leaving the arg
+at its default (`false`) reproduces the standard distroless image byte-for-byte.
+
 ## Importing
 
 `POST /import` (or the web app's **Import** page) bulk-imports an export file: Netscape bookmark HTML (browsers, Pocket, Raindrop, Pinboard, Instapaper), CSV with a URL column, a plain list of URLs, or an **Omnivore zip export**. Every new URL becomes a pending item and enriches asynchronously; URLs already in your library are skipped, so re-importing is safe.
