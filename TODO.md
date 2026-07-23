@@ -15,8 +15,6 @@
   lands the image in Library); add direct unit tests for `queueFileExists`
   catch path + `asset-store` `deleteQueueFile` negative path; RN component test
   for `capture.tsx` offline status branch
-- Reel places Phase 4: optional yt-dlp deep media — see
-  `docs/superpowers/specs/20260716-reel-places-design.md`
 - Reel places Phase 3 leftover: MCP `item_places` tool
 - Mobile overdrive follow-ups (PR #46): on-device pass — confirm the floating
   Liquid Glass tab bar doesn't obscure the last Library/Feed/Desk row (add
@@ -34,6 +32,16 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Reel places Phase 4 (PR #49, merged) — deep media + location tag. `REEL_MEDIA=
+  off|thumbnail|video` (default thumbnail); `video` shells out to user-installed
+  yt-dlp+ffmpeg (new `internal/reelmedia`), samples ≤8 frames (long edge 768) into
+  one batched vision call (`ExtractPlacesVisionFrames`), escalating only when
+  caption+location+thumbnail found nothing. Opportunistic inline-JSON tagged
+  location parsed at capture time → `items.tagged_location` (migration 0019),
+  near-certain candidate outranking caption. Generalised `ai.MergePlaces` with a
+  precedence table. Built subagent-driven; whole-branch review clean; CI green.
+  **`video` is off by default** — enable on the box with `REEL_MEDIA=video` +
+  yt-dlp/ffmpeg installed (2026-07-23)
 - Default all clients to the hosted instance (PR #48, merged) — mobile, dock,
   extension, and web now point at `openmind.gilla.fun` (+ its Clerk) out of the
   box, each as a fallback on the existing env var so self-host overrides still
