@@ -13,7 +13,10 @@ var DevUserID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
 type ctxKey int
 
-const userIDKey ctxKey = iota
+const (
+	userIDKey ctxKey = iota
+	apiKeyIDKey
+)
 
 // withUserID returns a context carrying the authenticated user id, for the
 // authenticate middleware to attach once it has resolved a caller.
@@ -28,4 +31,16 @@ func userID(ctx context.Context) uuid.UUID {
 		return id
 	}
 	return DevUserID
+}
+
+// withAPIKeyID returns a context carrying the API key the caller authenticated
+// with. Only bearer-key requests have one; Clerk and dev-mode requests do not.
+func withAPIKeyID(ctx context.Context, id uuid.UUID) context.Context {
+	return context.WithValue(ctx, apiKeyIDKey, id)
+}
+
+// apiKeyID returns the authenticating API key ID and whether one was present.
+func apiKeyID(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(apiKeyIDKey).(uuid.UUID)
+	return id, ok
 }

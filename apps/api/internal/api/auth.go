@@ -67,12 +67,13 @@ func authenticate(s *store.Store, cfg AuthConfig) func(http.Handler) http.Handle
 			bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 
 			if strings.HasPrefix(bearer, apiKeyPrefix) {
-				uid, ok := resolveAPIKey(r.Context(), s, bearer)
+				uid, keyID, ok := resolveAPIKey(r.Context(), s, bearer)
 				if !ok {
 					unauthorized(w)
 					return
 				}
-				next.ServeHTTP(w, r.WithContext(withUserID(r.Context(), uid)))
+				ctx := withAPIKeyID(withUserID(r.Context(), uid), keyID)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
@@ -99,24 +100,25 @@ func authenticate(s *store.Store, cfg AuthConfig) func(http.Handler) http.Handle
 	}
 }
 
-// resolveAPIKey looks up the user owning a full API key. Revoked and unknown
-// keys both fail the lookup (GetAPIKeyByHash filters out revoked_at IS NOT
-// NULL), so both resolve to the same 401. A successful lookup touches
-// last_used_at, throttled to at most once per touchLastUsedInterval.
-func resolveAPIKey(ctx context.Context, s *store.Store, full string) (uuid.UUID, bool) {
+// resolveAPIKey looks up the user owning a full API key, and the key's own ID.
+// Revoked and unknown keys both fail the lookup (GetAPIKeyByHash filters out
+// revoked_at IS NOT NULL), so both resolve to the same 401. A successful
+// lookup touches last_used_at, throttled to at most once per
+// touchLastUsedInterval.
+func resolveAPIKey(ctx context.Context, s *store.Store, full string) (uuid.UUID, uuid.UUID, bool) {
 	if s == nil {
-		return uuid.UUID{}, false
+		return uuid.UUID{}, uuid.UUID{}, false
 	}
 	row, err := s.Queries.GetAPIKeyByHash(ctx, auth.HashKey(full))
 	if err != nil {
-		return uuid.UUID{}, false
+		return uuid.UUID{}, uuid.UUID{}, false
 	}
 	if !row.LastUsedAt.Valid || time.Since(row.LastUsedAt.Time) > touchLastUsedInterval {
 		if err := s.Queries.TouchAPIKeyLastUsed(ctx, row.ApiKeyID); err != nil {
 			slog.Error("touching api key last_used_at", "err", err)
 		}
 	}
-	return row.UserID, true
+	return row.UserID, row.ApiKeyID, true
 }
 
 // resolveClerkJWT verifies a Clerk session JWT and maps it to a user, JIT

@@ -577,6 +577,30 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Settings" }
         "400": { description: invalid e-mail }
+  /push-devices:
+    post:
+      operationId: registerPushDevice
+      description: "Register (or refresh) an Expo push token for the calling device. Idempotent on the token; re-registering clears any prior delivery failure. The row is tied to the calling API key, so signing out removes it."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterPushDeviceRequest" }
+      responses:
+        "204": { description: registered }
+        "400": { description: invalid token or platform }
+  /push-devices/unregister:
+    post:
+      operationId: unregisterPushDevice
+      description: "Stop delivering push notifications to a token. Deliberately a POST rather than DELETE /push-devices/{token}: an Expo token contains square brackets, which are an encoding hazard in a path segment across the generated clients."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UnregisterPushDeviceRequest" }
+      responses:
+        "204": { description: unregistered }
+        "400": { description: missing token }
   /device-links/claim:
     post:
       operationId: claimDeviceLink
@@ -824,6 +848,17 @@ components:
       type: object
       properties:
         kindleEmail: { type: string, format: email }
+    RegisterPushDeviceRequest:
+      type: object
+      required: [token, platform]
+      properties:
+        token: { type: string, description: "Expo push token, e.g. ExponentPushToken[xxx]." }
+        platform: { type: string, enum: [ios, android] }
+    UnregisterPushDeviceRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string }
     ImportResult:
       type: object
       description: "Summary of a bulk import."

@@ -71,6 +71,12 @@ const (
 	LensRuleTypesVideo   LensRuleTypes = "video"
 )
 
+// Defines values for RegisterPushDeviceRequestPlatform.
+const (
+	Android RegisterPushDeviceRequestPlatform = "android"
+	Ios     RegisterPushDeviceRequestPlatform = "ios"
+)
+
 // Defines values for UnderstoodQueryTypes.
 const (
 	UnderstoodQueryTypesArticle UnderstoodQueryTypes = "article"
@@ -370,6 +376,17 @@ type PlaceWithItem struct {
 	Source string `json:"source"`
 }
 
+// RegisterPushDeviceRequest defines model for RegisterPushDeviceRequest.
+type RegisterPushDeviceRequest struct {
+	Platform RegisterPushDeviceRequestPlatform `json:"platform"`
+
+	// Token Expo push token, e.g. ExponentPushToken[xxx].
+	Token string `json:"token"`
+}
+
+// RegisterPushDeviceRequestPlatform defines model for RegisterPushDeviceRequest.Platform.
+type RegisterPushDeviceRequestPlatform string
+
 // RelatedItem defines model for RelatedItem.
 type RelatedItem struct {
 	Distance float64 `json:"distance"`
@@ -410,6 +427,11 @@ type UnderstoodQuery struct {
 
 // UnderstoodQueryTypes defines model for UnderstoodQuery.Types.
 type UnderstoodQueryTypes string
+
+// UnregisterPushDeviceRequest defines model for UnregisterPushDeviceRequest.
+type UnregisterPushDeviceRequest struct {
+	Token string `json:"token"`
+}
 
 // UpdateItemRequest Fields to update on an item. Both userTags and pinned are optional; omit both for a no-op edit that is rejected as a bad request.
 type UpdateItemRequest struct {
@@ -498,6 +520,12 @@ type CreateLensJSONRequestBody = CreateLensRequest
 
 // UpdateLensJSONRequestBody defines body for UpdateLens for application/json ContentType.
 type UpdateLensJSONRequestBody = CreateLensRequest
+
+// RegisterPushDeviceJSONRequestBody defines body for RegisterPushDevice for application/json ContentType.
+type RegisterPushDeviceJSONRequestBody = RegisterPushDeviceRequest
+
+// UnregisterPushDeviceJSONRequestBody defines body for UnregisterPushDevice for application/json ContentType.
+type UnregisterPushDeviceJSONRequestBody = UnregisterPushDeviceRequest
 
 // PatchSettingsJSONRequestBody defines body for PatchSettings for application/json ContentType.
 type PatchSettingsJSONRequestBody = PatchSettingsRequest
@@ -621,6 +649,12 @@ type ServerInterface interface {
 	// All of the user's extracted places
 	// (GET /places)
 	ListPlaces(w http.ResponseWriter, r *http.Request)
+
+	// (POST /push-devices)
+	RegisterPushDevice(w http.ResponseWriter, r *http.Request)
+
+	// (POST /push-devices/unregister)
+	UnregisterPushDevice(w http.ResponseWriter, r *http.Request)
 
 	// (GET /search)
 	SearchItems(w http.ResponseWriter, r *http.Request, params SearchItemsParams)
@@ -835,6 +869,16 @@ func (_ Unimplemented) SendLensToKindle(w http.ResponseWriter, r *http.Request, 
 // All of the user's extracted places
 // (GET /places)
 func (_ Unimplemented) ListPlaces(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (POST /push-devices)
+func (_ Unimplemented) RegisterPushDevice(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (POST /push-devices/unregister)
+func (_ Unimplemented) UnregisterPushDevice(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1904,6 +1948,46 @@ func (siw *ServerInterfaceWrapper) ListPlaces(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// RegisterPushDevice operation middleware
+func (siw *ServerInterfaceWrapper) RegisterPushDevice(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegisterPushDevice(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UnregisterPushDevice operation middleware
+func (siw *ServerInterfaceWrapper) UnregisterPushDevice(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UnregisterPushDevice(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SearchItems operation middleware
 func (siw *ServerInterfaceWrapper) SearchItems(w http.ResponseWriter, r *http.Request) {
 
@@ -2222,6 +2306,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/places", wrapper.ListPlaces)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/push-devices", wrapper.RegisterPushDevice)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/push-devices/unregister", wrapper.UnregisterPushDevice)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/search", wrapper.SearchItems)
