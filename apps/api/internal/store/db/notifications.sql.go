@@ -375,15 +375,15 @@ func (q *Queries) RecordDelivery(ctx context.Context, arg RecordDeliveryParams) 
 	return err
 }
 
-const upsertPushDevice = `-- name: UpsertPushDevice :exec
+const upsertPushDevice = `-- name: UpsertPushDevice :execrows
 INSERT INTO push_devices (user_id, api_key_id, token, platform)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (token) DO UPDATE
-SET user_id = EXCLUDED.user_id,
-    api_key_id = EXCLUDED.api_key_id,
+SET api_key_id = EXCLUDED.api_key_id,
     platform = EXCLUDED.platform,
     last_seen_at = now(),
     failed_at = NULL
+WHERE push_devices.user_id = EXCLUDED.user_id
 `
 
 type UpsertPushDeviceParams struct {
@@ -393,12 +393,31 @@ type UpsertPushDeviceParams struct {
 	Platform string
 }
 
-func (q *Queries) UpsertPushDevice(ctx context.Context, arg UpsertPushDeviceParams) error {
-	_, err := q.db.Exec(ctx, upsertPushDevice,
+// The conflict target is token alone, so without a guard any authenticated
+// user who knew (or guessed, or had leaked to them) another user's Expo token
+// could claim it: the update would reassign user_id, silently stealing the
+// victim's device — the victim stops receiving their own notifications and
+// starts receiving the attacker's instead. user_id is therefore left out of
+// the SET list entirely (ownership never transfers on conflict), and the
+// WHERE clause makes a cross-user conflict affect zero rows instead of
+// succeeding. :execrows lets the caller distinguish that zero-row outcome
+// from a real insert or same-user update.
+//
+// A device genuinely moving to a new account is already handled without a
+// transfer path: push_devices.api_key_id references api_keys(id) ON DELETE
+// CASCADE, and signing out revokes the API key, which cascades the device row
+// away. So by the time a different account registers the same token, the old
+// row is already gone and this WHERE clause never even applies — the guard is
+// invisible in normal use.
+func (q *Queries) UpsertPushDevice(ctx context.Context, arg UpsertPushDeviceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertPushDevice,
 		arg.UserID,
 		arg.ApiKeyID,
 		arg.Token,
 		arg.Platform,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

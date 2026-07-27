@@ -29,7 +29,7 @@ func flushFixture(t *testing.T) (*FlushNotificationsWorker, uuid.UUID, *notify.F
 	if err := s.Queries.EnsureUser(ctx, uid); err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}
-	if err := s.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{
+	if _, err := s.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{
 		UserID: uid, Token: "ExponentPushToken[x]", Platform: "ios",
 	}); err != nil {
 		t.Fatalf("upsert device: %v", err)

@@ -47,14 +47,24 @@ func (s *Server) RegisterPushDevice(w http.ResponseWriter, r *http.Request) {
 		keyID = pgtype.UUID{Bytes: id, Valid: true}
 	}
 
-	if err := s.store.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{
+	rows, err := s.store.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{
 		UserID:   userID(ctx),
 		ApiKeyID: keyID,
 		Token:    req.Token,
 		Platform: req.Platform,
-	}); err != nil {
+	})
+	if err != nil {
 		slog.Error("upserting push device", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not register device")
+		return
+	}
+	// Zero rows is the only signal the query gives for a cross-user conflict:
+	// the row exists (so the INSERT's ON CONFLICT fired) but the WHERE guard
+	// didn't match, so neither the insert nor the update applied. Any other
+	// count means the row is now the caller's, so it must be handled
+	// explicitly rather than falling through as a false success.
+	if rows == 0 {
+		writeError(w, http.StatusConflict, "this push token is already registered to a different account")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

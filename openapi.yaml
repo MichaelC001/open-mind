@@ -589,6 +589,7 @@ paths:
       responses:
         "204": { description: registered }
         "400": { description: invalid token or platform }
+        "409": { description: token is already registered to a different account }
   /push-devices/unregister:
     post:
       operationId: unregisterPushDevice

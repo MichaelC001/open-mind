@@ -29,7 +29,7 @@ func TestCheckReceiptsRetiresUnregisteredDevice(t *testing.T) {
 		t.Fatalf("ensure user: %v", err)
 	}
 	for _, tok := range []string{"ExponentPushToken[dead]", "ExponentPushToken[live]"} {
-		if err := s.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{UserID: uid, Token: tok, Platform: "ios"}); err != nil {
+		if _, err := s.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{UserID: uid, Token: tok, Platform: "ios"}); err != nil {
 			t.Fatalf("upsert %s: %v", tok, err)
 		}
 	}
@@ -124,7 +124,9 @@ func TestCheckReceiptsIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	uid := uuid.New()
 	s.Queries.EnsureUser(ctx, uid)
-	s.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{UserID: uid, Token: "ExponentPushToken[dead]", Platform: "ios"})
+	if _, err := s.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{UserID: uid, Token: "ExponentPushToken[dead]", Platform: "ios"}); err != nil {
+		t.Fatalf("upsert device: %v", err)
+	}
 	s.Queries.EnqueueNotification(ctx, db.EnqueueNotificationParams{
 		UserID: uid, Category: "digest", DedupeKey: "d1", Title: "t", Body: "", Data: []byte(`{}`),
 	})

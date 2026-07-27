@@ -66,7 +66,7 @@ func TestListPushDevicesSkipsFailed(t *testing.T) {
 		t.Fatalf("ensure user: %v", err)
 	}
 	for _, tok := range []string{"ExponentPushToken[a]", "ExponentPushToken[b]"} {
-		if err := s.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{UserID: uid, Token: tok, Platform: "ios"}); err != nil {
+		if _, err := s.Queries.UpsertPushDevice(ctx, db.UpsertPushDeviceParams{UserID: uid, Token: tok, Platform: "ios"}); err != nil {
 			t.Fatalf("upsert %s: %v", tok, err)
 		}
 	}

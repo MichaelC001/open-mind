@@ -62,15 +62,31 @@ VALUES ($1, $2, $3, $4, $5, $6, $7);
 -- target. Scoped by id, which is the caller's own user_id.
 SELECT email FROM users WHERE id = $1;
 
--- name: UpsertPushDevice :exec
+-- name: UpsertPushDevice :execrows
+-- The conflict target is token alone, so without a guard any authenticated
+-- user who knew (or guessed, or had leaked to them) another user's Expo token
+-- could claim it: the update would reassign user_id, silently stealing the
+-- victim's device — the victim stops receiving their own notifications and
+-- starts receiving the attacker's instead. user_id is therefore left out of
+-- the SET list entirely (ownership never transfers on conflict), and the
+-- WHERE clause makes a cross-user conflict affect zero rows instead of
+-- succeeding. :execrows lets the caller distinguish that zero-row outcome
+-- from a real insert or same-user update.
+--
+-- A device genuinely moving to a new account is already handled without a
+-- transfer path: push_devices.api_key_id references api_keys(id) ON DELETE
+-- CASCADE, and signing out revokes the API key, which cascades the device row
+-- away. So by the time a different account registers the same token, the old
+-- row is already gone and this WHERE clause never even applies — the guard is
+-- invisible in normal use.
 INSERT INTO push_devices (user_id, api_key_id, token, platform)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (token) DO UPDATE
-SET user_id = EXCLUDED.user_id,
-    api_key_id = EXCLUDED.api_key_id,
+SET api_key_id = EXCLUDED.api_key_id,
     platform = EXCLUDED.platform,
     last_seen_at = now(),
-    failed_at = NULL;
+    failed_at = NULL
+WHERE push_devices.user_id = EXCLUDED.user_id;
 
 -- name: DeletePushDevice :execrows
 DELETE FROM push_devices WHERE user_id = $1 AND token = $2;

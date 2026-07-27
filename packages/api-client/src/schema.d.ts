@@ -2114,6 +2114,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description token is already registered to a different account */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     unregisterPushDevice: {

@@ -183,3 +183,86 @@ func TestRegisterPushDeviceTiesToCallingAPIKey(t *testing.T) {
 		t.Errorf("stored api_key_id = %v valid=%v, want %s", stored.UUID, stored.Valid, keys[0].ID)
 	}
 }
+
+// TestRegisterPushDeviceRejectsCrossUserClaim proves that a second, unrelated
+// user cannot hijack a push token already owned by someone else. Before the
+// fix, UpsertPushDevice's ON CONFLICT (token) target reassigned user_id
+// unconditionally, so any authenticated caller who knew (or guessed/leaked)
+// another user's Expo token could silently steal that device: the victim
+// would stop receiving their own notifications, and the attacker's
+// notifications would start landing on the victim's phone. The registration
+// must instead be refused (409), and the original owner's row must be
+// provably untouched — not merely that the HTTP response was an error.
+func TestRegisterPushDeviceRejectsCrossUserClaim(t *testing.T) {
+	s, rc, pool := testDeps(t)
+	ctx := context.Background()
+
+	victim := uuid.New()
+	if err := s.Queries.EnsureUser(ctx, victim); err != nil {
+		t.Fatalf("ensure victim: %v", err)
+	}
+	victimKey := mintAPIKey(t, s, victim, "victim-phone")
+
+	attacker := uuid.New()
+	if err := s.Queries.EnsureUser(ctx, attacker); err != nil {
+		t.Fatalf("ensure attacker: %v", err)
+	}
+	attackerKey := mintAPIKey(t, s, attacker, "attacker-phone")
+
+	srv := httptest.NewServer(newSrvWithAuthConfig(t, s, rc, api.AuthConfig{Mode: api.AuthModeToken, LegacyToken: "sekret"}))
+	t.Cleanup(srv.Close)
+
+	const token = "ExponentPushToken[shared]"
+
+	reg := doJSONWithBearer(t, http.MethodPost, srv.URL+"/push-devices", `{"token":"`+token+`","platform":"ios"}`, victimKey)
+	defer reg.Body.Close()
+	if reg.StatusCode != http.StatusNoContent {
+		t.Fatalf("victim registration status = %d, want 204", reg.StatusCode)
+	}
+
+	claim := doJSONWithBearer(t, http.MethodPost, srv.URL+"/push-devices", `{"token":"`+token+`","platform":"android"}`, attackerKey)
+	defer claim.Body.Close()
+	if claim.StatusCode != http.StatusConflict {
+		t.Fatalf("attacker claim status = %d, want 409", claim.StatusCode)
+	}
+
+	var storedUser uuid.UUID
+	var storedPlatform string
+	row := pool.QueryRow(ctx, `SELECT user_id, platform FROM push_devices WHERE token = $1`, token)
+	if err := row.Scan(&storedUser, &storedPlatform); err != nil {
+		t.Fatalf("scanning stored row: %v", err)
+	}
+	if storedUser != victim {
+		t.Errorf("stored user_id = %v, want victim %v (ownership must not transfer)", storedUser, victim)
+	}
+	if storedPlatform != "ios" {
+		t.Errorf("stored platform = %q, want unchanged %q", storedPlatform, "ios")
+	}
+
+	// The victim's own row must still be listed as theirs.
+	devices, err := s.Queries.ListPushDevices(ctx, victim)
+	if err != nil {
+		t.Fatalf("list victim devices: %v", err)
+	}
+	if len(devices) != 1 || devices[0].Token != token {
+		t.Errorf("victim devices = %+v, want the original token still present", devices)
+	}
+}
+
+// doJSONWithBearer is doJSON plus a bearer Authorization header, for tests
+// that need to authenticate as a specific API-key-bound user rather than the
+// fixed dev user.
+func doJSONWithBearer(t *testing.T, method, url, body, bearer string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
+}
