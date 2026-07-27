@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +56,7 @@ func TestExpoBatchesTokens(t *testing.T) {
 }
 
 // A per-message error in the ticket response marks only that token failed.
+// When details.error is set, it takes precedence over the generic message.
 func TestExpoPerTicketErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
@@ -80,6 +82,42 @@ func TestExpoPerTicketErrors(t *testing.T) {
 	}
 	if results[1].OK || results[1].Err == nil {
 		t.Errorf("results[1] = %+v, want failure", results[1])
+	}
+	if !strings.Contains(results[1].Err.Error(), "DeviceNotRegistered") {
+		t.Errorf("results[1].Err = %q, want to contain 'DeviceNotRegistered'", results[1].Err.Error())
+	}
+}
+
+// When a ticket has only a generic message and no details.error, that message
+// is used as the error text.
+func TestExpoPerTicketErrorsFallbackToMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+			{"status": "ok", "id": "ticket-a"},
+			{"status": "error", "message": "rate limited"},
+		}})
+	}))
+	defer srv.Close()
+
+	e := NewExpo("")
+	e.BaseURL = srv.URL
+	results, err := e.Send(context.Background(), Notification{Title: "hi"}, Target{Devices: []Device{
+		{Token: "ExponentPushToken[a]"}, {Token: "ExponentPushToken[b]"},
+	}})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2", len(results))
+	}
+	if !results[0].OK || results[0].TicketID != "ticket-a" {
+		t.Errorf("results[0] = %+v", results[0])
+	}
+	if results[1].OK || results[1].Err == nil {
+		t.Errorf("results[1] = %+v, want failure", results[1])
+	}
+	if !strings.Contains(results[1].Err.Error(), "rate limited") {
+		t.Errorf("results[1].Err = %q, want to contain 'rate limited'", results[1].Err.Error())
 	}
 }
 
