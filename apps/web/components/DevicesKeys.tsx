@@ -3,8 +3,9 @@
 import { tokens } from "@openmind/ui";
 import QRCode from "qrcode";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { diffNotifySettings, type ChannelPref, type NotifyFormValues } from "../lib/notify-settings-diff";
 import { composeQuietHours, parseQuietHours } from "../lib/quiet-hours";
-import type { ApiKey, ApiKeyCreated, DeviceLinkCreated, PatchSettingsRequest, Settings } from "../lib/types";
+import type { ApiKey, ApiKeyCreated, DeviceLinkCreated, Settings } from "../lib/types";
 
 const { color, font } = tokens;
 
@@ -52,8 +53,6 @@ const fieldGroup: CSSProperties = {
   flex: "1 1 220px",
   minWidth: 200,
 };
-
-type ChannelPref = "off" | "push" | "email" | "both";
 
 const CHANNEL_OPTIONS: { value: ChannelPref; label: string }[] = [
   { value: "off", label: "Off" },
@@ -474,8 +473,26 @@ function ConnectDeviceSection() {
   );
 }
 
+// Maps a fetched Settings response onto the six form fields, applying the
+// same display defaults the server documents for an absent row (push / off
+// / push / no quiet hours / 10) — except timezone, which prefills from the
+// browser rather than "UTC" so nobody has to look up their own IANA name.
+// This is also the "loaded" snapshot handleSave diffs the form against, so
+// a save only sends fields the user actually changed.
+function toFormValues(data: Settings): NotifyFormValues {
+  return {
+    digest: (data.notifyDigest as ChannelPref | undefined) ?? "push",
+    feedRiver: (data.notifyFeedRiver as ChannelPref | undefined) ?? "off",
+    lifecycle: (data.notifyLifecycle as ChannelPref | undefined) ?? "push",
+    quietHours: data.notifyQuietHours ?? "",
+    timezone: data.notifyTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    dailyCap: data.notifyDailyCap ?? 10,
+  };
+}
+
 function NotificationsSection() {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [loaded, setLoaded] = useState<NotifyFormValues | null>(null);
   const [digest, setDigest] = useState<ChannelPref>("push");
   const [feedRiver, setFeedRiver] = useState<ChannelPref>("off");
   const [lifecycle, setLifecycle] = useState<ChannelPref>("push");
@@ -489,6 +506,17 @@ function NotificationsSection() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
 
+  function applyToForm(values: NotifyFormValues) {
+    setDigest(values.digest);
+    setFeedRiver(values.feedRiver);
+    setLifecycle(values.lifecycle);
+    const { start, end } = parseQuietHours(values.quietHours);
+    setQuietStart(start);
+    setQuietEnd(end);
+    setTimezone(values.timezone);
+    setDailyCap(String(values.dailyCap));
+  }
+
   useEffect(() => {
     let cancelled = false;
     setLoadFailed(false);
@@ -497,17 +525,9 @@ function NotificationsSection() {
       .then((data: Settings) => {
         if (cancelled) return;
         setSettings(data);
-        setDigest((data.notifyDigest as ChannelPref | undefined) ?? "push");
-        setFeedRiver((data.notifyFeedRiver as ChannelPref | undefined) ?? "off");
-        setLifecycle((data.notifyLifecycle as ChannelPref | undefined) ?? "push");
-        const { start, end } = parseQuietHours(data.notifyQuietHours ?? "");
-        setQuietStart(start);
-        setQuietEnd(end);
-        // The server only reports a timezone once the user has set one —
-        // until then, prefill with the browser's zone rather than "UTC" so
-        // nobody has to look up their own IANA name.
-        setTimezone(data.notifyTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
-        setDailyCap(String(data.notifyDailyCap ?? 10));
+        const values = toFormValues(data);
+        setLoaded(values);
+        applyToForm(values);
       })
       .catch(() => {
         if (!cancelled) setLoadFailed(true);
@@ -527,26 +547,28 @@ function NotificationsSection() {
       setError("Daily cap must be a whole number between 0 and 200.");
       return;
     }
+    if (!loaded) return;
 
-    const body: PatchSettingsRequest = {
-      notifyDigest: digest,
-      notifyFeedRiver: feedRiver,
-      notifyLifecycle: lifecycle,
-      // Always sent explicitly — composeQuietHours returns "" when either
-      // side is blank, and an explicit "" is what clears the setting on the
-      // server. Omitting the field entirely would mean "leave unchanged"
-      // and the control would appear to do nothing.
-      notifyQuietHours: composeQuietHours(quietStart, quietEnd),
-      notifyTimezone: timezone.trim(),
-      notifyDailyCap: cap,
+    const current: NotifyFormValues = {
+      digest,
+      feedRiver,
+      lifecycle,
+      quietHours: composeQuietHours(quietStart, quietEnd),
+      timezone: timezone.trim(),
+      dailyCap: cap,
     };
+    const patch = diffNotifySettings(loaded, current);
+    if (Object.keys(patch).length === 0) {
+      setSaved(true);
+      return;
+    }
 
     setBusy(true);
     try {
       const res = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(patch),
       });
       if (res.status === 400) {
         const payload = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -556,14 +578,9 @@ function NotificationsSection() {
       if (!res.ok) throw new Error("save failed");
       const data = (await res.json()) as Settings;
       setSettings(data);
-      setDigest((data.notifyDigest as ChannelPref | undefined) ?? "push");
-      setFeedRiver((data.notifyFeedRiver as ChannelPref | undefined) ?? "off");
-      setLifecycle((data.notifyLifecycle as ChannelPref | undefined) ?? "push");
-      const { start, end } = parseQuietHours(data.notifyQuietHours ?? "");
-      setQuietStart(start);
-      setQuietEnd(end);
-      setTimezone(data.notifyTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
-      setDailyCap(String(data.notifyDailyCap ?? 10));
+      const values = toFormValues(data);
+      setLoaded(values);
+      applyToForm(values);
       setSaved(true);
     } catch {
       setError("Couldn't save. Try again.");
