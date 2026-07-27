@@ -13,6 +13,8 @@ VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (user_id, dedupe_key) WHERE sent_at IS NULL DO NOTHING;
 
 -- name: ListUsersWithDueNotifications :many
+-- Deliberately unscoped: the flush job's whole purpose is to enumerate every
+-- user with due work, so a user_id predicate would defeat it.
 SELECT DISTINCT user_id FROM notifications
 WHERE sent_at IS NULL AND attempts < 3 AND deliver_after <= now();
 
@@ -69,6 +71,8 @@ SELECT token, platform FROM push_devices
 WHERE user_id = $1 AND failed_at IS NULL;
 
 -- name: MarkPushDeviceFailed :exec
+-- Deliberately unscoped: token is UNIQUE, so it alone identifies exactly one
+-- row and a user_id predicate would be redundant.
 UPDATE push_devices SET failed_at = now() WHERE token = $1;
 
 -- name: ListRecentTickets :many

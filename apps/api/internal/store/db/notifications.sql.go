@@ -237,6 +237,8 @@ SELECT DISTINCT user_id FROM notifications
 WHERE sent_at IS NULL AND attempts < 3 AND deliver_after <= now()
 `
 
+// Deliberately unscoped: the flush job's whole purpose is to enumerate every
+// user with due work, so a user_id predicate would defeat it.
 func (q *Queries) ListUsersWithDueNotifications(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listUsersWithDueNotifications)
 	if err != nil {
@@ -292,6 +294,8 @@ const markPushDeviceFailed = `-- name: MarkPushDeviceFailed :exec
 UPDATE push_devices SET failed_at = now() WHERE token = $1
 `
 
+// Deliberately unscoped: token is UNIQUE, so it alone identifies exactly one
+// row and a user_id predicate would be redundant.
 func (q *Queries) MarkPushDeviceFailed(ctx context.Context, token string) error {
 	_, err := q.db.Exec(ctx, markPushDeviceFailed, token)
 	return err
