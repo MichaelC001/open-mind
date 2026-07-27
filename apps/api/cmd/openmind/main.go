@@ -181,8 +181,9 @@ func run(ctx context.Context, args []string) error {
 
 	// TODO(task 10): replace this stopgap with env-driven construction
 	// (NOTIFY_CHANNELS, Expo access token, mailer wiring). Until then the
-	// router is all-noop, so the flush job still runs and still stamps rows
-	// but delivers nothing.
+	// router is all-noop and Configured is false, so the flush job still
+	// runs, claims and stamps every due row as delivered (draining the
+	// outbox so it never backs up), without ever actually sending anything.
 	notifyDeps := jobs.NotifyDeps{Router: notify.NewRouter(notify.NewNoop(), notify.NewNoop()), Configured: false}
 
 	switch cmd {

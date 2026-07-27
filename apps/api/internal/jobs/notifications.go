@@ -39,13 +39,14 @@ const pruneInterval = 24 * time.Hour
 const notifyMaxAttempts = 3
 
 // noTargetRetry is how long a notification is deferred when the router is
-// configured but the user currently has no live push device and no e-mail
-// address (e.g. a new mobile install before its Expo token registers). It is
+// configured but none of the channels enabled for this notification have a
+// destination — e.g. a new mobile install before its Expo token registers,
+// or a user with email-only digests and no e-mail address on file. It is
 // deliberately much longer than notifyScanInterval: claiming the row on every
 // one-minute scan would exhaust notifyMaxAttempts within three minutes and
 // lose exactly the onboarding notifications this path exists to protect. An
 // hour is still short enough that the backlog clears promptly once a device
-// registers.
+// or address registers.
 const noTargetRetry = time.Hour
 
 // ReceiptChecker resolves Expo ticket IDs to their terminal error codes. It is
@@ -54,11 +55,13 @@ type ReceiptChecker interface {
 	Receipts(ctx context.Context, ticketIDs []string) (map[string]string, error)
 }
 
-// NotifyDeps carries the delivery router into the workers. Configured is false
-// when NOTIFY_CHANNELS is unset; the flush still runs and still stamps rows
-// (via the noop router), which keeps the outbox from growing unbounded on an
-// install that never delivers anything. Receipts is nil when Expo is not
-// configured, in which case the receipt job is a no-op.
+// NotifyDeps carries the delivery router into the workers. Configured is
+// false when NOTIFY_CHANNELS is unset, in which case Router wraps two noop
+// senders: Deliver returns no results for anything, and deliverOne's
+// Configured branch stamps the row anyway — the outbox must still drain on
+// an install that never delivers, rather than piling up behind the pending
+// partial index forever. Receipts is nil when Expo is not configured, in
+// which case the receipt job is a no-op.
 type NotifyDeps struct {
 	Router     *notify.Router
 	Receipts   ReceiptChecker
@@ -230,30 +233,44 @@ func (w *FlushNotificationsWorker) Work(ctx context.Context, job *river.Job[Flus
 // (claimed and sent), as opposed to deferred without being touched — the
 // caller only spends daily-cap budget on an attempt.
 //
-// Stamping semantics: at least one destination succeeding stamps the row —
-// re-attempting on a later flush would duplicate the message to whichever
-// destination already received it, and repeating a notification is a smaller
-// harm than losing one. Every destination failing leaves the row pending
-// with last_error as the final write, so a later scan retries it until
-// attempts reaches notifyMaxAttempts and the abandoned-row prune clause
-// eventually collects it. MarkNotificationsFailed must be the last write on
-// that path: stamping afterwards (MarkNotificationsSent clears last_error)
-// would erase the failure and make the retry ladder unreachable.
+// Every row leaves this function on exactly one of three paths:
+//   - noop mode (Configured false): stamped unconditionally, since nothing is
+//     wired up to attempt delivery and the outbox must still drain.
+//   - no destination for any enabled channel (Configured true): deferred by
+//     noTargetRetry before claiming, so it can't burn an attempt while
+//     waiting for a device or address to register; collected by
+//     PruneNotifications' third clause after 30 days if that never happens.
+//   - configured with a destination: claimed, delivered, and then either
+//     stamped (at least one channel succeeded — re-attempting would
+//     duplicate the message to whichever destination already received it,
+//     and repeating a notification is a smaller harm than losing one) or
+//     left pending with last_error set as the final write (every channel
+//     failed), so a later scan retries it until attempts reaches
+//     notifyMaxAttempts and the abandoned-row prune clause collects it.
+//     MarkNotificationsFailed must be the last write on that path: stamping
+//     afterwards (MarkNotificationsSent clears last_error) would erase the
+//     failure and make the retry ladder unreachable.
 func (w *FlushNotificationsWorker) deliverOne(ctx context.Context, uid uuid.UUID, n notify.Notification, ch notify.Channels, target notify.Target) (bool, error) {
-	// A configured router with nothing to deliver to (no live push device
-	// and no e-mail address — e.g. a new mobile install before its Expo token
-	// registers) would otherwise claim the row, get a silent (nil, nil) back
-	// from every sender, and fall through to "no destination failed" —
-	// stamping it as delivered and losing it for good. Defer instead of
-	// claiming: claiming here would burn an attempt on every one-minute scan
-	// and exhaust notifyMaxAttempts within three minutes.
-	if w.Deps.Configured && len(target.Devices) == 0 && target.Email == "" {
+	// The guard is evaluated per enabled channel, not on the target as a
+	// whole: a user with only the e-mail channel enabled for this category
+	// and no e-mail address on file must defer even if they have a live push
+	// device, because push isn't enabled here and can't help. Symmetrically
+	// for push-only with no devices but an e-mail on file. Checking the whole
+	// target (any device OR any email) would let either of those slip past
+	// the guard, claim the row, get a silent (nil, nil) back from the one
+	// sender that's actually enabled, and fall through to "no destination
+	// failed" — stamping it as delivered and losing it for good.
+	hasDestination := (ch.Push && len(target.Devices) > 0) || (ch.Email && target.Email != "")
+	if w.Deps.Configured && !hasDestination {
+		// Defer instead of claiming: claiming here would burn an attempt on
+		// every one-minute scan and exhaust notifyMaxAttempts within three
+		// minutes — exactly the onboarding notifications this path protects.
 		if err := w.Store.Queries.DeferNotifications(ctx, db.DeferNotificationsParams{
 			UserID: uid, DeliverAfter: pgTimestamp(time.Now().Add(noTargetRetry)), Ids: n.SourceIDs,
 		}); err != nil {
 			return false, fmt.Errorf("deferring for no target: %w", err)
 		}
-		slog.Debug("flush_notifications: no push device or e-mail yet, deferring", "user_id", uid, "notification_id", n.ID)
+		slog.Debug("flush_notifications: no destination for any enabled channel, deferring", "user_id", uid, "notification_id", n.ID)
 		return false, nil
 	}
 
@@ -287,10 +304,22 @@ func (w *FlushNotificationsWorker) deliverOne(ctx context.Context, uid uuid.UUID
 		return true, w.stamp(ctx, uid, n.SourceIDs)
 	}
 	if len(results) == 0 {
-		// Configured is true (the no-target guard above only fires when
-		// false) but the router still produced nothing to record — e.g. a
-		// channel toggled on with no sender wired up. Leave the row pending
-		// without asserting an error message that didn't happen.
+		if !w.Deps.Configured {
+			// Noop mode: nothing is wired up to attempt delivery at all (both
+			// senders are notify.NewNoop()), so results is always empty here.
+			// The row must still be stamped — draining the outbox on an
+			// install with nothing configured is the "noop keeps the app
+			// fully functional" guarantee, and leaving it pending would block
+			// re-enqueue of the same dedupe key behind the pending partial
+			// index indefinitely.
+			return true, w.stamp(ctx, uid, n.SourceIDs)
+		}
+		// Configured is true, so the no-target guard above already confirmed
+		// at least one enabled channel has a destination — this branch is
+		// only reached if the router still produced nothing to record, e.g.
+		// a channel enabled with no sender wired into the Router at all.
+		// Leave the row pending without asserting an error message that
+		// didn't happen.
 		slog.Warn("flush_notifications: no delivery attempted despite a resolvable target", "user_id", uid, "notification_id", n.ID)
 		return true, nil
 	}

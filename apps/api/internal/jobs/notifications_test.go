@@ -53,13 +53,14 @@ func enqueue(t *testing.T, w *FlushNotificationsWorker, uid uuid.UUID, cat, key,
 // ListDueNotifications can't make: that query filters sent_at IS NULL, so a
 // row leaves it whether it was stamped (delivered, or intentionally
 // disabled-and-stamped) or merely deferred — the two outcomes this substrate
-// must never confuse.
-func readNotification(t *testing.T, w *FlushNotificationsWorker, uid uuid.UUID, dedupeKey string) (sentAt, deliverAfter pgtype.Timestamptz, lastError string) {
+// must never confuse. attempts distinguishes "deferred before claiming" (0)
+// from "claimed and then left pending" (>0).
+func readNotification(t *testing.T, w *FlushNotificationsWorker, uid uuid.UUID, dedupeKey string) (sentAt, deliverAfter pgtype.Timestamptz, lastError string, attempts int32) {
 	t.Helper()
 	err := w.Store.Pool.QueryRow(context.Background(),
-		`SELECT sent_at, deliver_after, last_error FROM notifications WHERE user_id = $1 AND dedupe_key = $2`,
+		`SELECT sent_at, deliver_after, last_error, attempts FROM notifications WHERE user_id = $1 AND dedupe_key = $2`,
 		uid, dedupeKey,
-	).Scan(&sentAt, &deliverAfter, &lastError)
+	).Scan(&sentAt, &deliverAfter, &lastError, &attempts)
 	if err != nil {
 		t.Fatalf("read notification row (dedupe_key=%s): %v", dedupeKey, err)
 	}
@@ -120,7 +121,7 @@ func TestFlushStampsDisabledCategoryWithoutDelivering(t *testing.T) {
 	if len(push.Sent)+len(email.Sent) != 0 {
 		t.Errorf("delivered %d messages for a disabled category", len(push.Sent)+len(email.Sent))
 	}
-	sentAt, _, _ := readNotification(t, w, uid, key)
+	sentAt, _, _, _ := readNotification(t, w, uid, key)
 	if !sentAt.Valid {
 		t.Errorf("sent_at not set; disabled-category rows must be stamped so they don't accumulate")
 	}
@@ -172,7 +173,7 @@ func TestFlushDefersDuringQuietHours(t *testing.T) {
 	if len(push.Sent) != 0 {
 		t.Errorf("delivered %d messages during quiet hours", len(push.Sent))
 	}
-	sentAt, deliverAfter, _ := readNotification(t, w, uid, key)
+	sentAt, deliverAfter, _, _ := readNotification(t, w, uid, key)
 	if sentAt.Valid {
 		t.Errorf("sent_at set; quiet hours must defer, never drop or deliver")
 	}
@@ -224,7 +225,7 @@ func TestFlushPartialChannelFailureStillStamps(t *testing.T) {
 	if len(email.Sent) != 1 {
 		t.Errorf("email sends = %d, want 1 (email must still go out when push fails)", len(email.Sent))
 	}
-	sentAt, _, _ := readNotification(t, w, uid, key)
+	sentAt, _, _, _ := readNotification(t, w, uid, key)
 	if !sentAt.Valid {
 		t.Errorf("sent_at not set; a partial success must still stamp the row")
 	}
@@ -244,7 +245,7 @@ func TestFlushAllChannelsFailingLeavesRowPending(t *testing.T) {
 	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
 		t.Fatalf("Work: %v", err)
 	}
-	sentAt, _, lastErr := readNotification(t, w, uid, key)
+	sentAt, _, lastErr, _ := readNotification(t, w, uid, key)
 	if sentAt.Valid {
 		t.Errorf("sent_at set; a row where every channel failed must not be stamped")
 	}
@@ -257,6 +258,71 @@ func TestFlushAllChannelsFailingLeavesRowPending(t *testing.T) {
 	}
 	if len(due) != 1 {
 		t.Errorf("pending = %d, want 1 (still retryable on the next scan)", len(due))
+	}
+}
+
+// Noop mode (Configured: false) must still drain the outbox — that is the
+// "noop keeps the app fully functional" guarantee, and the human ruling this
+// substrate follows verbatim. main.go currently wires exactly this
+// configuration as the Task 10 stopgap, so every deployment takes this path
+// until real channels are configured; a regression here would silently stop
+// the whole outbox from ever draining.
+func TestFlushStampsInNoopMode(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	uid := uuid.New()
+	if err := s.Queries.EnsureUser(ctx, uid); err != nil {
+		t.Fatalf("ensure user: %v", err)
+	}
+	w := &FlushNotificationsWorker{
+		Store: s,
+		Deps:  NotifyDeps{Router: notify.NewRouter(notify.NewNoop(), notify.NewNoop()), Configured: false},
+	}
+	const key = "digest:lens-a:2026-07-27"
+	enqueue(t, w, uid, "digest", key, "Design digest", `{}`)
+
+	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	sentAt, _, _, _ := readNotification(t, w, uid, key)
+	if !sentAt.Valid {
+		t.Errorf("sent_at not set; noop mode must still drain the outbox")
+	}
+}
+
+// The no-target guard must consider only the channels enabled for this
+// category. A user with email-only digest notifications and no e-mail
+// address must be deferred even though they still have a live push device —
+// the device is irrelevant because push isn't enabled for this category, so
+// checking "any device OR any email" (rather than per-channel) would let
+// this case slip past the guard, claim the row every scan, and silently
+// abandon it after notifyMaxAttempts with last_error never set.
+func TestFlushDefersWhenOnlyEnabledChannelHasNoDestination(t *testing.T) {
+	w, uid, push, email := flushFixture(t)
+	ctx := context.Background()
+	if err := w.Store.Queries.UpsertUserSetting(ctx, db.UpsertUserSettingParams{
+		UserID: uid, Key: notify.KeyDigest, Value: "email",
+	}); err != nil {
+		t.Fatalf("set pref: %v", err)
+	}
+	const key = "digest:lens-a:2026-07-27"
+	enqueue(t, w, uid, "digest", key, "Design digest", `{}`)
+
+	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if len(push.Sent)+len(email.Sent) != 0 {
+		t.Errorf("delivered %d messages with no destination for the only enabled channel", len(push.Sent)+len(email.Sent))
+	}
+	sentAt, deliverAfter, _, attempts := readNotification(t, w, uid, key)
+	if sentAt.Valid {
+		t.Errorf("sent_at set; row must not be stamped when its only enabled channel has no destination")
+	}
+	if attempts != 0 {
+		t.Errorf("attempts = %d, want 0 (must defer before claiming, not burn an attempt)", attempts)
+	}
+	if !deliverAfter.Time.After(time.Now()) {
+		t.Errorf("deliver_after = %v, want pushed into the future", deliverAfter.Time)
 	}
 }
 
