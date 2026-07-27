@@ -22,6 +22,13 @@
   Android tab icons + reduce-motion morph skip; consider a true image-hero morph
   (fly the lead image + match the 4:3 detail hero height, vs today's gradient
   cross-fade)
+- Mobile notification rollout checks (need a fresh dev build — `expo-notifications`
+  is a native module): confirm iOS system prompt fires exactly once and denial
+  behaves as expected; verify Android channel produces a non-silent notification;
+  confirm `getExpoPushTokenAsync` returns a live token against the real EAS project;
+  verify a real push tap routes correctly in foreground, background, and killed
+  states including the cold-start path; confirm the offline-drain local notification
+  actually displays.
 - Places map follow-ups: note OSM tile runtime dep in self-hosting docs;
   clustering polish — keyboard-accessible web cluster markers (currently
   pointer-only), and (optional) truer mobile zoom mapping using viewport width
@@ -29,9 +36,26 @@
 - Android follow-ups: Play Console internal-testing track (auto-updates vs
   the current sideloaded APK), Android adaptive icon, add Play App Signing
   SHA-1 to the Maps key restriction if we ship via Play
+- Notifications follow-ups: per-item reminders (`remind me about this save`) —
+  deliberately scoped out, needs a spec/table/item-detail UI; `notifyDailyCap` has
+  no empty-string escape hatch (integer field), no clear-to-default path.
+- Go test parallelism: suite races against shared `openmind_test` database at
+  default parallelism, needs `-p 1`. Pre-existing (fails on baseline 76efc55), but
+  `task test` as documented is unreliable.
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- Notifications (feat/notifications-spec) — at-least-once delivery (Expo, email,
+  noop) via idempotent outbox (migration 0020_notifications.sql, partial unique
+  index guard). `internal/notify` adapter + four River workers: scan, per-user
+  flush (preferences → coalesce → quiet-hours → cap), receipt reconcile, retention.
+  Lens digests untouched; feed-river coalesces to one row per feed per hour;
+  enrichment failures only. Daily cap counts outbox rows, independent of device/
+  channel. Quiet hours defer (never drop), computed wall-clock in user's IANA zone
+  for DST safety. Six `/settings` preferences, `/push-devices` registration, web
+  settings UI, mobile permission + tap routing. Config: `NOTIFY_CHANNELS` (unset =
+  silent noop), `EXPO_ACCESS_TOKEN`. **`notify.feed_river` off by default; digest +
+  lifecycle push by default.** `docker compose up` unchanged (2026-07-27)
 - Reel places Phase 4 (PR #49, merged) — deep media + location tag. `REEL_MEDIA=
   off|thumbnail|video` (default thumbnail); `video` shells out to user-installed
   yt-dlp+ffmpeg (new `internal/reelmedia`), samples ≤8 frames (long edge 768) into
