@@ -16,8 +16,12 @@ func NewRouter(push, email Sender) *Router {
 	return &Router{Push: push, Email: email}
 }
 
-// Enabled reports whether any real (non-noop) channel is configured. The flush
-// job uses this only for logging; delivery is correct either way.
+// Enabled reports whether any real (non-noop) channel is wired. This is
+// load-bearing, not cosmetic: cmd/openmind's buildNotifyDeps calls it to set
+// NotifyDeps.Configured, and the flush job uses Configured to decide what a
+// zero-result delivery means — noop mode, so stamp the row and let the
+// outbox drain, versus a real channel that was supposed to deliver and
+// didn't, so leave the row pending. Do not inline or simplify this away.
 func (r *Router) Enabled() bool {
 	return (r.Push != nil && r.Push.Name() != "noop") || (r.Email != nil && r.Email.Name() != "noop")
 }
