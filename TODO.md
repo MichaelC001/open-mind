@@ -29,6 +29,15 @@
   verify a real push tap routes correctly in foreground, background, and killed
   states including the cold-start path; confirm the offline-drain local notification
   actually displays.
+- Mobile push-device error messaging: 409 from `POST /push-devices` (device
+  already registered to another account) collapses to generic "check your
+  connection" error in `apps/mobile/app/(tabs)/settings.tsx` — needs explicit
+  conflict messaging.
+- Mobile sign-out device handover: unregister-on-sign-out is best-effort; offline
+  sign-out, unreachable instance, or crash mid-flight leaves the push-device row
+  owned by the previous account, causing next account's registration to 409 with
+  no self-service recovery — needs server-side reaper or explicit "claim this
+  device" flow.
 - Places map follow-ups: note OSM tile runtime dep in self-hosting docs;
   clustering polish — keyboard-accessible web cluster markers (currently
   pointer-only), and (optional) truer mobile zoom mapping using viewport width
@@ -38,7 +47,12 @@
   SHA-1 to the Maps key restriction if we ship via Play
 - Notifications follow-ups: per-item reminders (`remind me about this save`) —
   deliberately scoped out, needs a spec/table/item-detail UI; `notifyDailyCap` has
-  no empty-string escape hatch (integer field), no clear-to-default path.
+  no empty-string escape hatch (integer field), no clear-to-default path;
+  notification-substrate polish: `Expo.Receipts` doc promises partial success
+  (failed chunk still returns earlier chunks) but caller (`check_receipts`)
+  discards the map on error; separately, `ListRecentTickets` `LIMIT 5000`
+  without `ORDER BY` makes reconciliation arbitrary above 5000 tickets/hour —
+  add `ORDER BY sent_at`.
 - Go test parallelism: suite races against shared `openmind_test` database at
   default parallelism, needs `-p 1`. Pre-existing (fails on baseline 76efc55), but
   `task test` as documented is unreliable.
