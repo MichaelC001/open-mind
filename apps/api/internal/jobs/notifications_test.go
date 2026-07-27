@@ -2,13 +2,17 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
 
 	"github.com/rohithgilla12/openmind/api/internal/notify"
+	"github.com/rohithgilla12/openmind/api/internal/reelmedia"
+	"github.com/rohithgilla12/openmind/api/internal/store"
 	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
 
@@ -43,6 +47,23 @@ func enqueue(t *testing.T, w *FlushNotificationsWorker, uid uuid.UUID, cat, key,
 	}); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
+}
+
+// readNotification reads a row's delivery state directly, for assertions
+// ListDueNotifications can't make: that query filters sent_at IS NULL, so a
+// row leaves it whether it was stamped (delivered, or intentionally
+// disabled-and-stamped) or merely deferred — the two outcomes this substrate
+// must never confuse.
+func readNotification(t *testing.T, w *FlushNotificationsWorker, uid uuid.UUID, dedupeKey string) (sentAt, deliverAfter pgtype.Timestamptz, lastError string) {
+	t.Helper()
+	err := w.Store.Pool.QueryRow(context.Background(),
+		`SELECT sent_at, deliver_after, last_error FROM notifications WHERE user_id = $1 AND dedupe_key = $2`,
+		uid, dedupeKey,
+	).Scan(&sentAt, &deliverAfter, &lastError)
+	if err != nil {
+		t.Fatalf("read notification row (dedupe_key=%s): %v", dedupeKey, err)
+	}
+	return
 }
 
 func TestFlushDeliversAndStamps(t *testing.T) {
@@ -84,11 +105,14 @@ func TestFlushIsIdempotent(t *testing.T) {
 }
 
 // feed_river defaults to off: rows must be stamped, not delivered, so they do
-// not accumulate in the pending index forever.
+// not accumulate in the pending index forever. Asserted directly against
+// sent_at, not ListDueNotifications, since that query can't distinguish
+// "stamped" from "deferred".
 func TestFlushStampsDisabledCategoryWithoutDelivering(t *testing.T) {
 	w, uid, push, email := flushFixture(t)
 	ctx := context.Background()
-	enqueue(t, w, uid, "feed_river", "feed_river:f1:2026-07-27T09", "5 new items", `{"feed_id":"f1","count":5}`)
+	const key = "feed_river:f1:2026-07-27T09"
+	enqueue(t, w, uid, "feed_river", key, "5 new items", `{"feed_id":"f1","count":5}`)
 
 	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
 		t.Fatalf("Work: %v", err)
@@ -96,9 +120,9 @@ func TestFlushStampsDisabledCategoryWithoutDelivering(t *testing.T) {
 	if len(push.Sent)+len(email.Sent) != 0 {
 		t.Errorf("delivered %d messages for a disabled category", len(push.Sent)+len(email.Sent))
 	}
-	due, _ := w.Store.Queries.ListDueNotifications(ctx, uid)
-	if len(due) != 0 {
-		t.Errorf("pending = %d, want 0 (disabled rows must be stamped)", len(due))
+	sentAt, _, _ := readNotification(t, w, uid, key)
+	if !sentAt.Valid {
+		t.Errorf("sent_at not set; disabled-category rows must be stamped so they don't accumulate")
 	}
 }
 
@@ -125,7 +149,10 @@ func TestFlushCoalescesFeedRiver(t *testing.T) {
 	}
 }
 
-// Quiet hours defer rather than drop.
+// Quiet hours defer rather than drop. Asserted directly against sent_at and
+// deliver_after, since ListDueNotifications leaving the row is also
+// consistent with the row having been dropped (stamped some other way) —
+// this test guards a non-negotiable rule and must not pass on that bug.
 func TestFlushDefersDuringQuietHours(t *testing.T) {
 	w, uid, push, _ := flushFixture(t)
 	ctx := context.Background()
@@ -136,7 +163,8 @@ func TestFlushDefersDuringQuietHours(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("set quiet hours: %v", err)
 	}
-	enqueue(t, w, uid, "digest", "digest:lens-a:2026-07-27", "Design digest", `{}`)
+	const key = "digest:lens-a:2026-07-27"
+	enqueue(t, w, uid, "digest", key, "Design digest", `{}`)
 
 	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
 		t.Fatalf("Work: %v", err)
@@ -144,9 +172,12 @@ func TestFlushDefersDuringQuietHours(t *testing.T) {
 	if len(push.Sent) != 0 {
 		t.Errorf("delivered %d messages during quiet hours", len(push.Sent))
 	}
-	due, _ := w.Store.Queries.ListDueNotifications(ctx, uid)
-	if len(due) != 0 {
-		t.Errorf("rows still due = %d; deferral should have pushed deliver_after out", len(due))
+	sentAt, deliverAfter, _ := readNotification(t, w, uid, key)
+	if sentAt.Valid {
+		t.Errorf("sent_at set; quiet hours must defer, never drop or deliver")
+	}
+	if !deliverAfter.Time.After(time.Now()) {
+		t.Errorf("deliver_after = %v, want pushed into the future by the quiet-hours window", deliverAfter.Time)
 	}
 }
 
@@ -167,5 +198,122 @@ func TestFlushLifecycleBypassesCap(t *testing.T) {
 	if len(push.Sent) != 1 {
 		t.Errorf("push sends = %d, want 1 (lifecycle bypasses the cap)", len(push.Sent))
 	}
-	_ = time.Now
+}
+
+// One channel failing must not suppress delivery on the other, and a partial
+// success still stamps the row: re-attempting later would duplicate the
+// message to whichever channel already succeeded.
+func TestFlushPartialChannelFailureStillStamps(t *testing.T) {
+	w, uid, push, email := flushFixture(t)
+	ctx := context.Background()
+	push.Err = errors.New("expo: transport down")
+	if err := w.Store.Queries.UpsertUserSetting(ctx, db.UpsertUserSettingParams{
+		UserID: uid, Key: notify.KeyDigest, Value: "both",
+	}); err != nil {
+		t.Fatalf("set pref: %v", err)
+	}
+	if _, err := w.Store.Pool.Exec(ctx, `UPDATE users SET email = $1 WHERE id = $2`, "user@example.com", uid); err != nil {
+		t.Fatalf("set email: %v", err)
+	}
+	const key = "digest:lens-a:2026-07-27"
+	enqueue(t, w, uid, "digest", key, "Design digest", `{}`)
+
+	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if len(email.Sent) != 1 {
+		t.Errorf("email sends = %d, want 1 (email must still go out when push fails)", len(email.Sent))
+	}
+	sentAt, _, _ := readNotification(t, w, uid, key)
+	if !sentAt.Valid {
+		t.Errorf("sent_at not set; a partial success must still stamp the row")
+	}
+}
+
+// The regression guard for the critical bug where a total failure was
+// recorded as a successful send: MarkNotificationsSent unconditionally wiped
+// the last_error MarkNotificationsFailed had just written, and the row was
+// stamped anyway.
+func TestFlushAllChannelsFailingLeavesRowPending(t *testing.T) {
+	w, uid, push, _ := flushFixture(t)
+	ctx := context.Background()
+	push.Err = errors.New("expo: transport down")
+	const key = "digest:lens-a:2026-07-27"
+	enqueue(t, w, uid, "digest", key, "Design digest", `{}`)
+
+	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	sentAt, _, lastErr := readNotification(t, w, uid, key)
+	if sentAt.Valid {
+		t.Errorf("sent_at set; a row where every channel failed must not be stamped")
+	}
+	if lastErr == "" {
+		t.Errorf("last_error empty; want the failure recorded as the final write")
+	}
+	due, err := w.Store.Queries.ListDueNotifications(ctx, uid)
+	if err != nil {
+		t.Fatalf("list due: %v", err)
+	}
+	if len(due) != 1 {
+		t.Errorf("pending = %d, want 1 (still retryable on the next scan)", len(due))
+	}
+}
+
+// countFlushJobs counts enqueued flush_notifications River jobs, for
+// asserting the scan's fan-out without a worker actually running them.
+func countFlushJobs(t *testing.T, s *store.Store) int {
+	t.Helper()
+	var n int
+	if err := s.Pool.QueryRow(context.Background(), `SELECT count(*) FROM river_job WHERE kind = $1`, FlushNotificationsArgs{}.Kind()).Scan(&n); err != nil {
+		t.Fatalf("counting flush jobs: %v", err)
+	}
+	return n
+}
+
+// The scan is the fan-out that turns "users with due rows" into one
+// flush_notifications job per user — untested until now despite CLAUDE.md's
+// per-job idempotency rule.
+func TestScanNotificationsEnqueuesOneFlushPerDueUser(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.Pool.Exec(ctx, `TRUNCATE river_job CASCADE`); err != nil {
+		t.Fatalf("truncate river_job: %v", err)
+	}
+	rc, err := NewRiverClient(s.Pool, nil, nil, KindleDeps{}, NotifyDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
+	if err != nil {
+		t.Fatalf("river client: %v", err)
+	}
+
+	uidA, uidB := uuid.New(), uuid.New()
+	for _, uid := range []uuid.UUID{uidA, uidB} {
+		if err := s.Queries.EnsureUser(ctx, uid); err != nil {
+			t.Fatalf("ensure user: %v", err)
+		}
+		if err := s.Queries.EnqueueNotification(ctx, db.EnqueueNotificationParams{
+			UserID: uid, Category: "digest", DedupeKey: "d1", Title: "t", Body: "", Data: []byte(`{}`),
+		}); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+
+	w := &ScanNotificationsWorker{Store: s, River: rc}
+	if err := w.Work(ctx, &river.Job[ScanNotificationsArgs]{}); err != nil {
+		t.Fatalf("first Work: %v", err)
+	}
+	if got := countFlushJobs(t, s); got != 2 {
+		t.Fatalf("flush jobs enqueued = %d, want 2 (one per due user)", got)
+	}
+
+	// The scan itself has no "already enqueued" guard — that idempotency
+	// lives downstream in the flush, which stamps rows so a re-enqueued flush
+	// finds nothing due and no-ops. Running the scan again must still behave
+	// sanely: no error, and it keeps enqueueing for whichever users are still
+	// due (both are, since nothing has been flushed yet).
+	if err := w.Work(ctx, &river.Job[ScanNotificationsArgs]{}); err != nil {
+		t.Fatalf("second Work: %v", err)
+	}
+	if got := countFlushJobs(t, s); got != 4 {
+		t.Fatalf("flush jobs enqueued after second scan = %d, want 4", got)
+	}
 }

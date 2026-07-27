@@ -28,8 +28,9 @@ func (q *Queries) ClaimNotifications(ctx context.Context, arg ClaimNotifications
 }
 
 const countDeliveriesSince = `-- name: CountDeliveriesSince :one
-SELECT count(*) FROM notification_deliveries
-WHERE user_id = $1 AND ok AND sent_at >= $2
+SELECT count(DISTINCT nd.notification_id) FROM notification_deliveries nd
+JOIN notifications n ON n.id = nd.notification_id
+WHERE nd.user_id = $1 AND nd.ok AND nd.sent_at >= $2 AND n.category <> 'lifecycle'
 `
 
 type CountDeliveriesSinceParams struct {
@@ -37,6 +38,14 @@ type CountDeliveriesSinceParams struct {
 	SentAt pgtype.Timestamptz
 }
 
+// Counts distinct outbox rows, not ledger rows, so the cap is independent of
+// how many devices or channels a message fanned out to — a two-device
+// push+email send would otherwise burn up to four units of budget for one
+// notification. Joins notifications to exclude category = 'lifecycle':
+// lifecycle bypasses the cap for itself, but without this predicate its
+// deliveries would still count against everyone else's budget (ten
+// lifecycle notifications at 09:00 would zero out the day's digest/feed_river
+// allowance by 09:01).
 func (q *Queries) CountDeliveriesSince(ctx context.Context, arg CountDeliveriesSinceParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countDeliveriesSince, arg.UserID, arg.SentAt)
 	var count int64
@@ -305,10 +314,14 @@ const pruneNotifications = `-- name: PruneNotifications :execrows
 DELETE FROM notifications
 WHERE (sent_at IS NOT NULL AND sent_at < now() - interval '30 days')
    OR (sent_at IS NULL AND attempts >= 3 AND created_at < now() - interval '7 days')
+   OR (sent_at IS NULL AND created_at < now() - interval '30 days')
 `
 
-// Two clauses: delivered rows age out after 30 days, and abandoned rows
-// (retries exhausted, never sent) after 7 — without the second, failed rows
+// Three clauses: delivered rows age out after 30 days; abandoned rows
+// (retries exhausted, never sent) after 7; and any other still-pending row
+// after 30 days regardless of attempts — e.g. one kept deferred because the
+// user never registers a push device or e-mail, so it is never claimed and
+// never exhausts attempts on its own. Without this third clause such a row
 // would sit in the pending partial index forever.
 func (q *Queries) PruneNotifications(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneNotifications)

@@ -38,6 +38,16 @@ const pruneInterval = 24 * time.Hour
 // together.
 const notifyMaxAttempts = 3
 
+// noTargetRetry is how long a notification is deferred when the router is
+// configured but the user currently has no live push device and no e-mail
+// address (e.g. a new mobile install before its Expo token registers). It is
+// deliberately much longer than notifyScanInterval: claiming the row on every
+// one-minute scan would exhaust notifyMaxAttempts within three minutes and
+// lose exactly the onboarding notifications this path exists to protect. An
+// hour is still short enough that the backlog clears promptly once a device
+// registers.
+const noTargetRetry = time.Hour
+
 // ReceiptChecker resolves Expo ticket IDs to their terminal error codes. It is
 // an interface rather than *notify.Expo so tests can substitute a stub.
 type ReceiptChecker interface {
@@ -166,6 +176,11 @@ func (w *FlushNotificationsWorker) Work(ctx context.Context, job *river.Job[Flus
 		return err
 	}
 
+	// budget is in units of outbox rows (CountDeliveriesSince counts distinct
+	// notification_ids, excluding lifecycle), so it is spent by
+	// len(n.SourceIDs) below, not by one unit per coalesced message — a
+	// three-row feed_river roll-up must cost 3, the same as three separate
+	// digest sends would.
 	budget := prefs.DailyCap - int(sentToday)
 	for _, cat := range []notify.Category{notify.CategoryLifecycle, notify.CategoryDigest, notify.CategoryFeedRiver} {
 		pending := rowsFor(uid, cat, due)
@@ -182,44 +197,79 @@ func (w *FlushNotificationsWorker) Work(ctx context.Context, job *river.Job[Flus
 			continue
 		}
 
-		// lifecycle bypasses the cap: a "we gave up on your save" swallowed
+		// The cap is re-checked per coalesced message, not once per category:
+		// checking only at category entry let a single row of remaining
+		// budget wave through every pending message in the category (e.g.
+		// budget=1 with 20 pending digests would have sent all 20). lifecycle
+		// bypasses the check entirely — a "we gave up on your save" swallowed
 		// because feed river spent the budget is the one failure mode that
 		// makes the whole feature untrustworthy.
-		if cat != notify.CategoryLifecycle && budget <= 0 {
-			if err := w.Store.Queries.DeferNotifications(ctx, db.DeferNotificationsParams{
-				UserID: uid, DeliverAfter: pgTimestamp(startOfDay(now, prefs.Location).AddDate(0, 0, 1)), Ids: idsOf(pending),
-			}); err != nil {
-				return fmt.Errorf("deferring over-cap notifications: %w", err)
-			}
-			continue
-		}
-
 		for _, n := range notify.Coalesce(cat, pending) {
-			if err := w.deliverOne(ctx, uid, n, ch, target); err != nil {
+			if cat != notify.CategoryLifecycle && budget <= 0 {
+				if err := w.Store.Queries.DeferNotifications(ctx, db.DeferNotificationsParams{
+					UserID: uid, DeliverAfter: pgTimestamp(startOfDay(now, prefs.Location).AddDate(0, 0, 1)), Ids: n.SourceIDs,
+				}); err != nil {
+					return fmt.Errorf("deferring over-cap notifications: %w", err)
+				}
+				continue
+			}
+			attempted, err := w.deliverOne(ctx, uid, n, ch, target)
+			if err != nil {
 				return err
 			}
-			if cat != notify.CategoryLifecycle {
-				budget--
+			if attempted && cat != notify.CategoryLifecycle {
+				budget -= len(n.SourceIDs)
 			}
 		}
 	}
 	return nil
 }
 
-// deliverOne claims, delivers, records the ledger, and stamps one message.
-func (w *FlushNotificationsWorker) deliverOne(ctx context.Context, uid uuid.UUID, n notify.Notification, ch notify.Channels, target notify.Target) error {
+// deliverOne claims, delivers, records the ledger, and then either stamps or
+// fails one message. It returns whether a delivery was actually attempted
+// (claimed and sent), as opposed to deferred without being touched — the
+// caller only spends daily-cap budget on an attempt.
+//
+// Stamping semantics: at least one destination succeeding stamps the row —
+// re-attempting on a later flush would duplicate the message to whichever
+// destination already received it, and repeating a notification is a smaller
+// harm than losing one. Every destination failing leaves the row pending
+// with last_error as the final write, so a later scan retries it until
+// attempts reaches notifyMaxAttempts and the abandoned-row prune clause
+// eventually collects it. MarkNotificationsFailed must be the last write on
+// that path: stamping afterwards (MarkNotificationsSent clears last_error)
+// would erase the failure and make the retry ladder unreachable.
+func (w *FlushNotificationsWorker) deliverOne(ctx context.Context, uid uuid.UUID, n notify.Notification, ch notify.Channels, target notify.Target) (bool, error) {
+	// A configured router with nothing to deliver to (no live push device
+	// and no e-mail address — e.g. a new mobile install before its Expo token
+	// registers) would otherwise claim the row, get a silent (nil, nil) back
+	// from every sender, and fall through to "no destination failed" —
+	// stamping it as delivered and losing it for good. Defer instead of
+	// claiming: claiming here would burn an attempt on every one-minute scan
+	// and exhaust notifyMaxAttempts within three minutes.
+	if w.Deps.Configured && len(target.Devices) == 0 && target.Email == "" {
+		if err := w.Store.Queries.DeferNotifications(ctx, db.DeferNotificationsParams{
+			UserID: uid, DeliverAfter: pgTimestamp(time.Now().Add(noTargetRetry)), Ids: n.SourceIDs,
+		}); err != nil {
+			return false, fmt.Errorf("deferring for no target: %w", err)
+		}
+		slog.Debug("flush_notifications: no push device or e-mail yet, deferring", "user_id", uid, "notification_id", n.ID)
+		return false, nil
+	}
+
 	if err := w.Store.Queries.ClaimNotifications(ctx, db.ClaimNotificationsParams{UserID: uid, Ids: n.SourceIDs}); err != nil {
-		return fmt.Errorf("claiming notifications: %w", err)
+		return false, fmt.Errorf("claiming notifications: %w", err)
 	}
 
 	results := w.Deps.Router.Deliver(ctx, n, ch, target)
 
-	anyFailed := false
+	anyOK := false
 	for _, res := range results {
 		errText := ""
 		if res.Err != nil {
 			errText = res.Err.Error()
-			anyFailed = true
+		} else if res.OK {
+			anyOK = true
 		}
 		// The ledger is per source row so the cap count and the audit trail
 		// both stay accurate for a coalesced message.
@@ -228,19 +278,28 @@ func (w *FlushNotificationsWorker) deliverOne(ctx context.Context, uid uuid.UUID
 				UserID: uid, NotificationID: srcID, Channel: res.Channel,
 				Token: res.Token, TicketID: res.TicketID, Ok: res.OK, Error: errText,
 			}); err != nil {
-				return fmt.Errorf("recording delivery: %w", err)
+				return true, fmt.Errorf("recording delivery: %w", err)
 			}
 		}
 	}
 
-	if anyFailed {
-		if err := w.Store.Queries.MarkNotificationsFailed(ctx, db.MarkNotificationsFailedParams{
-			UserID: uid, LastError: "one or more channels failed", Ids: n.SourceIDs,
-		}); err != nil {
-			return fmt.Errorf("marking failed: %w", err)
-		}
+	if anyOK {
+		return true, w.stamp(ctx, uid, n.SourceIDs)
 	}
-	return w.stamp(ctx, uid, n.SourceIDs)
+	if len(results) == 0 {
+		// Configured is true (the no-target guard above only fires when
+		// false) but the router still produced nothing to record — e.g. a
+		// channel toggled on with no sender wired up. Leave the row pending
+		// without asserting an error message that didn't happen.
+		slog.Warn("flush_notifications: no delivery attempted despite a resolvable target", "user_id", uid, "notification_id", n.ID)
+		return true, nil
+	}
+	if err := w.Store.Queries.MarkNotificationsFailed(ctx, db.MarkNotificationsFailedParams{
+		UserID: uid, LastError: "all channels failed", Ids: n.SourceIDs,
+	}); err != nil {
+		return true, fmt.Errorf("marking failed: %w", err)
+	}
+	return true, nil
 }
 
 // stamp marks rows delivered.

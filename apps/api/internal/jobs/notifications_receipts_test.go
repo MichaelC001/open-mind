@@ -109,6 +109,73 @@ func TestCheckReceiptsNoopWithoutExpo(t *testing.T) {
 	}
 }
 
+// pruneFixture is one notifications row inserted with explicit timestamps —
+// EnqueueNotification always defaults to now(), so aged-out rows have to be
+// written directly.
+type pruneFixture struct {
+	key          string
+	sentAtExpr   string // SQL expression, or "NULL"
+	attempts     int
+	createdAtAgo string // SQL interval literal, e.g. "31 days"
+	wantSurvives bool
+}
+
+func TestPruneNotificationsDeletesAgedOutRows(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	uid := uuid.New()
+	if err := s.Queries.EnsureUser(ctx, uid); err != nil {
+		t.Fatalf("ensure user: %v", err)
+	}
+
+	fixtures := []pruneFixture{
+		// Delivered rows age out after 30 days; a recent one survives.
+		{"old-sent", "now() - interval '31 days'", 0, "31 days", false},
+		{"recent-sent", "now() - interval '1 day'", 0, "1 day", true},
+		// Abandoned rows (retries exhausted, never sent) age out after 7
+		// days; still within the grace period survives.
+		{"old-abandoned", "NULL", 3, "8 days", false},
+		{"recent-abandoned", "NULL", 3, "1 day", true},
+		// Never-claimed rows (e.g. permanently deferred for lack of a
+		// target) age out after 30 days regardless of attempts.
+		{"old-unclaimed", "NULL", 0, "31 days", false},
+		{"recent-unclaimed", "NULL", 0, "1 day", true},
+	}
+	for _, f := range fixtures {
+		sql := `INSERT INTO notifications (user_id, category, dedupe_key, title, body, sent_at, attempts, created_at, deliver_after)
+			VALUES ($1, 'digest', $2, 't', '', ` + f.sentAtExpr + `, $3, now() - interval '` + f.createdAtAgo + `', now())`
+		if _, err := s.Pool.Exec(ctx, sql, uid, f.key, f.attempts); err != nil {
+			t.Fatalf("insert fixture %s: %v", f.key, err)
+		}
+	}
+
+	wantDeleted := 0
+	for _, f := range fixtures {
+		if !f.wantSurvives {
+			wantDeleted++
+		}
+	}
+
+	count, err := s.Queries.PruneNotifications(ctx)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if count != int64(wantDeleted) {
+		t.Errorf("deleted = %d, want %d", count, wantDeleted)
+	}
+	for _, f := range fixtures {
+		var n int
+		if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM notifications WHERE dedupe_key = $1`, f.key).Scan(&n); err != nil {
+			t.Fatalf("counting %s: %v", f.key, err)
+		}
+		survived := n == 1
+		if survived != f.wantSurvives {
+			t.Errorf("fixture %s survived = %v, want %v", f.key, survived, f.wantSurvives)
+		}
+	}
+}
+
+// Re-running against an already-pruned table must be safe and change nothing.
 func TestPruneNotificationsRunsClean(t *testing.T) {
 	s := testStore(t)
 	w := &PruneNotificationsWorker{Store: s}
