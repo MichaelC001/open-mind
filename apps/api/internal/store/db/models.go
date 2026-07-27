@@ -129,6 +129,44 @@ type Link struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type Notification struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	Category     string
+	DedupeKey    string
+	Title        string
+	Body         string
+	Data         []byte
+	CreatedAt    pgtype.Timestamptz
+	DeliverAfter pgtype.Timestamptz
+	SentAt       pgtype.Timestamptz
+	Attempts     int32
+	LastError    string
+}
+
+type NotificationDelivery struct {
+	ID             uuid.UUID
+	UserID         uuid.UUID
+	NotificationID uuid.UUID
+	Channel        string
+	Token          string
+	TicketID       string
+	SentAt         pgtype.Timestamptz
+	Ok             bool
+	Error          string
+}
+
+type PushDevice struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	ApiKeyID   pgtype.UUID
+	Token      string
+	Platform   string
+	CreatedAt  pgtype.Timestamptz
+	LastSeenAt pgtype.Timestamptz
+	FailedAt   pgtype.Timestamptz
+}
+
 type User struct {
 	ID          uuid.UUID
 	CreatedAt   pgtype.Timestamptz
