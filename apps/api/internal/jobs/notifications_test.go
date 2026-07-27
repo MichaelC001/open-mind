@@ -35,7 +35,7 @@ func flushFixture(t *testing.T) (*FlushNotificationsWorker, uuid.UUID, *notify.F
 	push.ChannelName, email.ChannelName = "expo", "email"
 	w := &FlushNotificationsWorker{
 		Store: s,
-		Deps:  NotifyDeps{Router: notify.NewRouter(push, email), Configured: true},
+		Deps:  NotifyDeps{Router: notify.NewRouter(push, email)},
 	}
 	return w, uid, push, email
 }
@@ -261,12 +261,13 @@ func TestFlushAllChannelsFailingLeavesRowPending(t *testing.T) {
 	}
 }
 
-// Noop mode (Configured: false) must still drain the outbox — that is the
-// "noop keeps the app fully functional" guarantee, and the human ruling this
-// substrate follows verbatim. main.go currently wires exactly this
-// configuration as the Task 10 stopgap, so every deployment takes this path
-// until real channels are configured; a regression here would silently stop
-// the whole outbox from ever draining.
+// Noop mode (both senders are notify.NewNoop(), so Router.Live never reports
+// anything live) must still drain the outbox — that is the "noop keeps the
+// app fully functional" guarantee, and the human ruling this substrate
+// follows verbatim. main.go currently wires exactly this configuration as
+// the Task 10 stopgap, so every deployment takes this path until real
+// channels are configured; a regression here would silently stop the whole
+// outbox from ever draining.
 func TestFlushStampsInNoopMode(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -276,7 +277,7 @@ func TestFlushStampsInNoopMode(t *testing.T) {
 	}
 	w := &FlushNotificationsWorker{
 		Store: s,
-		Deps:  NotifyDeps{Router: notify.NewRouter(notify.NewNoop(), notify.NewNoop()), Configured: false},
+		Deps:  NotifyDeps{Router: notify.NewRouter(notify.NewNoop(), notify.NewNoop())},
 	}
 	const key = "digest:lens-a:2026-07-27"
 	enqueue(t, w, uid, "digest", key, "Design digest", `{}`)
@@ -323,6 +324,58 @@ func TestFlushDefersWhenOnlyEnabledChannelHasNoDestination(t *testing.T) {
 	}
 	if !deliverAfter.Time.After(time.Now()) {
 		t.Errorf("deliver_after = %v, want pushed into the future", deliverAfter.Time)
+	}
+}
+
+// TestFlushChannelEnabledButServerWiredToNoopIsStamped is the regression test
+// for the whole-branch review's C1 finding: NOTIFY_CHANNELS naming only one
+// channel (e.g. "expo") leaves the user's *other* enabled channel backed by
+// notify.NewNoop(), not by a real sender. Before the fix, NotifyDeps.Configured
+// was a single global bool meaning "some real channel is wired anywhere", so a
+// user with notify.digest=email and an address on file passed the no-target
+// guard (their email is non-empty), got routed to the noop email sender,
+// received a silent (nil, nil) back, and was left pending forever — never
+// stamped, never given a last_error, retried identically until
+// notifyMaxAttempts and then pruned. This asserts the row is stamped instead,
+// with noop semantics applied per channel rather than globally.
+func TestFlushChannelEnabledButServerWiredToNoopIsStamped(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	uid := uuid.New()
+	if err := s.Queries.EnsureUser(ctx, uid); err != nil {
+		t.Fatalf("ensure user: %v", err)
+	}
+	if _, err := s.Pool.Exec(ctx, `UPDATE users SET email = $1 WHERE id = $2`, "user@example.com", uid); err != nil {
+		t.Fatalf("set email: %v", err)
+	}
+	if err := s.Queries.UpsertUserSetting(ctx, db.UpsertUserSettingParams{
+		UserID: uid, Key: notify.KeyDigest, Value: "email",
+	}); err != nil {
+		t.Fatalf("set pref: %v", err)
+	}
+
+	// Mirrors NOTIFY_CHANNELS=expo in production: push is a real sender, email
+	// stays the real notify.NewNoop() — not a test double standing in for
+	// "disabled" — because that is exactly the case Router.Enabled() collapses
+	// away into a single global bool.
+	push := notify.NewFake()
+	push.ChannelName = "expo"
+	w := &FlushNotificationsWorker{
+		Store: s,
+		Deps:  NotifyDeps{Router: notify.NewRouter(push, notify.NewNoop())},
+	}
+	const key = "digest:lens-a:2026-07-27"
+	enqueue(t, w, uid, "digest", key, "Design digest", `{}`)
+
+	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	sentAt, _, _, attempts := readNotification(t, w, uid, key)
+	if !sentAt.Valid {
+		t.Errorf("sent_at not set; a channel the user enabled but the server wired to noop must be stamped, not left pending forever")
+	}
+	if attempts == 0 {
+		t.Errorf("attempts = 0; row was deferred as if it had no destination at all, rather than claimed and stamped under noop semantics")
 	}
 }
 

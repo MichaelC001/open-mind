@@ -69,6 +69,40 @@ func TestRouterPartialFailure(t *testing.T) {
 	}
 }
 
+// Live must mask each channel down to whether it is backed by a real sender,
+// independently per channel — this is the fix for the whole-branch review's
+// C1 finding, where a single global "some channel is real" bool let a
+// channel enabled by the user but wired to noop look identical to a live
+// channel that produced no results.
+func TestRouterLiveMasksNoopChannelsIndependently(t *testing.T) {
+	push := NewFake()
+	push.ChannelName = "expo"
+	r := NewRouter(push, NewNoop())
+
+	got := r.Live(Channels{Push: true, Email: true})
+	if !got.Push {
+		t.Error("Live.Push = false, want true (a real sender is wired)")
+	}
+	if got.Email {
+		t.Error("Live.Email = true, want false (email is backed by noop)")
+	}
+
+	// A channel not even requested by the caller must never come back live,
+	// regardless of what sender backs it.
+	got = r.Live(Channels{Push: false, Email: true})
+	if got.Push {
+		t.Error("Live.Push = true, want false (push was not requested)")
+	}
+}
+
+func TestRouterLiveNilSenderIsNeverLive(t *testing.T) {
+	r := &Router{}
+	got := r.Live(Channels{Push: true, Email: true})
+	if got.Push || got.Email {
+		t.Errorf("Live = %+v, want both false with nil senders", got)
+	}
+}
+
 func TestRouterNoChannelsEnabled(t *testing.T) {
 	push, email := NewFake(), NewFake()
 	r := NewRouter(push, email)

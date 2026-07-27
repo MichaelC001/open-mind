@@ -16,14 +16,30 @@ func NewRouter(push, email Sender) *Router {
 	return &Router{Push: push, Email: email}
 }
 
-// Enabled reports whether any real (non-noop) channel is wired. This is
-// load-bearing, not cosmetic: cmd/openmind's buildNotifyDeps calls it to set
-// NotifyDeps.Configured, and the flush job uses Configured to decide what a
-// zero-result delivery means — noop mode, so stamp the row and let the
-// outbox drain, versus a real channel that was supposed to deliver and
-// didn't, so leave the row pending. Do not inline or simplify this away.
+// Enabled reports whether any real (non-noop) channel is wired at all. It is
+// used only for the startup log in cmd/openmind — whether to warn that no
+// channel is configured anywhere. It must never stand in for "the channel
+// this message is going out on is real": NOTIFY_CHANNELS names channels
+// independently (e.g. "expo" alone leaves email wired to noop), so a global
+// answer and a per-message answer diverge exactly when only one channel is
+// requested. Live answers the per-message question; use that in the flush job.
 func (r *Router) Enabled() bool {
 	return (r.Push != nil && r.Push.Name() != "noop") || (r.Email != nil && r.Email.Name() != "noop")
+}
+
+// Live masks ch down to the channels actually backed by a real (non-noop)
+// sender. A channel the user enabled in their preferences but that the
+// server wired to noop (because NOTIFY_CHANNELS didn't name it, or SMTP
+// wasn't configured) must be treated as "nothing configured" for this
+// message — not as a delivery attempt that mysteriously produced no results.
+// This is what deliverOne must check instead of a single global "some channel
+// somewhere is real" bool, which cannot represent a mixed configuration like
+// NOTIFY_CHANNELS=expo plus a user whose digest preference is email.
+func (r *Router) Live(ch Channels) Channels {
+	return Channels{
+		Push:  ch.Push && r.Push != nil && r.Push.Name() != "noop",
+		Email: ch.Email && r.Email != nil && r.Email.Name() != "noop",
+	}
 }
 
 // Deliver sends n over every channel enabled in ch and returns one Result per

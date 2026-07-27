@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/rohithgilla12/openmind/api/internal/mailer"
+	"github.com/rohithgilla12/openmind/api/internal/notify"
 )
 
 func TestStdioRefusesClerkMode(t *testing.T) {
@@ -29,42 +30,44 @@ func TestStdioAllowsTokenMode(t *testing.T) {
 	}
 }
 
-// TestBuildNotifyDepsConfiguredTruthTable is the load-bearing test in this
-// file: NotifyDeps.Configured tells the flush job whether a zero-result
-// delivery means "nothing is configured, stamp the row anyway" or "a real
-// channel should have delivered and didn't, leave it pending". Getting this
-// wrong in either direction either silently drops notifications or wedges
-// the outbox, so every combination of requested channels and SMTP
-// availability is asserted here rather than trusted to a smaller sample.
-func TestBuildNotifyDepsConfiguredTruthTable(t *testing.T) {
+// TestBuildNotifyDepsRouterLiveTruthTable replaces the old Configured-based
+// truth table (Configured was deleted along with NotifyDeps.Configured as
+// part of the C1 fix — a global flag can't answer a per-channel question).
+// What must still hold for every combination of requested channels and SMTP
+// availability is that Router.Live(Channels{Push: true, Email: true}) — the
+// per-message question the flush job actually asks — reports exactly which
+// channels ended up backed by a real sender.
+func TestBuildNotifyDepsRouterLiveTruthTable(t *testing.T) {
 	smtpMailer := mailer.New(mailer.SMTPConfig{Host: "smtp.example.com", From: "notify@example.com"})
 
 	cases := []struct {
-		name     string
-		channels string
-		mailer   mailer.Mailer
-		want     bool
+		name      string
+		channels  string
+		mailer    mailer.Mailer
+		wantPush  bool
+		wantEmail bool
 	}{
-		{"unset, no smtp", "", nil, false},
-		{"unset, smtp configured", "", smtpMailer, false},
-		{"expo only", "expo", nil, true},
-		{"email requested, no smtp", "email", nil, false},
-		{"email requested, smtp configured", "email", smtpMailer, true},
-		{"expo and email, no smtp", "expo,email", nil, true},
-		{"expo and email, smtp configured", "expo,email", smtpMailer, true},
-		{"unknown channel only", "carrier-pigeon", nil, false},
-		{"whitespace and empty entries", " expo , , ", nil, true},
+		{"unset, no smtp", "", nil, false, false},
+		{"unset, smtp configured", "", smtpMailer, false, false},
+		{"expo only", "expo", nil, true, false},
+		{"email requested, no smtp", "email", nil, false, false},
+		{"email requested, smtp configured", "email", smtpMailer, false, true},
+		{"expo and email, no smtp", "expo,email", nil, true, false},
+		{"expo and email, smtp configured", "expo,email", smtpMailer, true, true},
+		{"unknown channel only", "carrier-pigeon", nil, false, false},
+		{"whitespace and empty entries", " expo , , ", nil, true, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("NOTIFY_CHANNELS", tc.channels)
 			deps := buildNotifyDeps(tc.mailer)
-			if deps.Configured != tc.want {
-				t.Fatalf("Configured = %v, want %v", deps.Configured, tc.want)
-			}
 			if deps.Router == nil {
 				t.Fatal("Router must never be nil, even with nothing configured")
+			}
+			live := deps.Router.Live(notify.Channels{Push: true, Email: true})
+			if live.Push != tc.wantPush || live.Email != tc.wantEmail {
+				t.Fatalf("Live = %+v, want {Push:%v Email:%v}", live, tc.wantPush, tc.wantEmail)
 			}
 		})
 	}

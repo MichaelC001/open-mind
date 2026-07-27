@@ -274,14 +274,10 @@ func kindleDepsFromEnv(m mailer.Mailer) jobs.KindleDeps {
 // fully functional with no delivery configured: producers still enqueue, the
 // flush still stamps every due row as handled, and nothing is sent or errors.
 //
-// Configured must reflect whether a real (non-noop) sender actually ended up
-// wired, not merely whether a channel was requested — the flush job uses
-// Configured to decide whether a zero-result delivery means "nothing is
-// configured, stamp the row anyway" or "a real channel should have delivered
-// and didn't, leave it pending". Router.Enabled() already encodes exactly
-// that distinction, so it's reused here rather than re-derived from the
-// channel set — which matters for e.g. NOTIFY_CHANNELS=email with no SMTP
-// configured, where the channel is requested but the sender stays noop.
+// There is deliberately no "Configured" flag on the returned NotifyDeps: the
+// flush job needs a per-message, per-channel answer (Router.Live), not a
+// single global one, so main.go has no correct global value to compute here
+// in the first place — see C1 in the whole-branch review.
 func buildNotifyDeps(m mailer.Mailer) jobs.NotifyDeps {
 	channels := map[string]bool{}
 	for _, c := range strings.Split(os.Getenv("NOTIFY_CHANNELS"), ",") {
@@ -311,11 +307,10 @@ func buildNotifyDeps(m mailer.Mailer) jobs.NotifyDeps {
 	}
 
 	router := notify.NewRouter(push, email)
-	configured := router.Enabled()
-	if !configured {
+	if !router.Enabled() {
 		slog.Info("no notification channels configured; notifications will be recorded but not delivered")
 	}
-	return jobs.NotifyDeps{Router: router, Receipts: receipts, Configured: configured}
+	return jobs.NotifyDeps{Router: router, Receipts: receipts}
 }
 
 // kindleConfigFromDeps translates the worker-facing jobs.KindleDeps into the
