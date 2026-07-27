@@ -811,10 +811,40 @@ export interface components {
              * @description Destination e-mail for Send-to-Kindle digests; absent if not configured.
              */
             kindleEmail?: string;
+            /**
+             * @description Channels for Lens digest notifications. Default push.
+             * @enum {string}
+             */
+            notifyDigest?: "off" | "push" | "email" | "both";
+            /**
+             * @description Channels for coalesced feed-river activity. Default off.
+             * @enum {string}
+             */
+            notifyFeedRiver?: "off" | "push" | "email" | "both";
+            /**
+             * @description Channels for save-failure notifications. Default push. Exempt from the daily cap.
+             * @enum {string}
+             */
+            notifyLifecycle?: "off" | "push" | "email" | "both";
+            /** @description Wall-clock range in the user's timezone, e.g. 22:00-07:00. Empty means none. */
+            notifyQuietHours?: string;
+            /** @description IANA timezone used for quiet hours and the daily-cap reset, e.g. Europe/London. */
+            notifyTimezone?: string;
+            /** @description Maximum successful deliveries per day before non-lifecycle notifications defer. Default 10. */
+            notifyDailyCap?: number;
         };
         PatchSettingsRequest: {
             /** Format: email */
             kindleEmail?: string;
+            /** @enum {string} */
+            notifyDigest?: "off" | "push" | "email" | "both";
+            /** @enum {string} */
+            notifyFeedRiver?: "off" | "push" | "email" | "both";
+            /** @enum {string} */
+            notifyLifecycle?: "off" | "push" | "email" | "both";
+            notifyQuietHours?: string;
+            notifyTimezone?: string;
+            notifyDailyCap?: number;
         };
         RegisterPushDeviceRequest: {
             /** @description Expo push token, e.g. ExponentPushToken[xxx]. */

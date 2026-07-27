@@ -71,10 +71,58 @@ const (
 	LensRuleTypesVideo   LensRuleTypes = "video"
 )
 
+// Defines values for PatchSettingsRequestNotifyDigest.
+const (
+	PatchSettingsRequestNotifyDigestBoth  PatchSettingsRequestNotifyDigest = "both"
+	PatchSettingsRequestNotifyDigestEmail PatchSettingsRequestNotifyDigest = "email"
+	PatchSettingsRequestNotifyDigestOff   PatchSettingsRequestNotifyDigest = "off"
+	PatchSettingsRequestNotifyDigestPush  PatchSettingsRequestNotifyDigest = "push"
+)
+
+// Defines values for PatchSettingsRequestNotifyFeedRiver.
+const (
+	PatchSettingsRequestNotifyFeedRiverBoth  PatchSettingsRequestNotifyFeedRiver = "both"
+	PatchSettingsRequestNotifyFeedRiverEmail PatchSettingsRequestNotifyFeedRiver = "email"
+	PatchSettingsRequestNotifyFeedRiverOff   PatchSettingsRequestNotifyFeedRiver = "off"
+	PatchSettingsRequestNotifyFeedRiverPush  PatchSettingsRequestNotifyFeedRiver = "push"
+)
+
+// Defines values for PatchSettingsRequestNotifyLifecycle.
+const (
+	PatchSettingsRequestNotifyLifecycleBoth  PatchSettingsRequestNotifyLifecycle = "both"
+	PatchSettingsRequestNotifyLifecycleEmail PatchSettingsRequestNotifyLifecycle = "email"
+	PatchSettingsRequestNotifyLifecycleOff   PatchSettingsRequestNotifyLifecycle = "off"
+	PatchSettingsRequestNotifyLifecyclePush  PatchSettingsRequestNotifyLifecycle = "push"
+)
+
 // Defines values for RegisterPushDeviceRequestPlatform.
 const (
 	Android RegisterPushDeviceRequestPlatform = "android"
 	Ios     RegisterPushDeviceRequestPlatform = "ios"
+)
+
+// Defines values for SettingsNotifyDigest.
+const (
+	SettingsNotifyDigestBoth  SettingsNotifyDigest = "both"
+	SettingsNotifyDigestEmail SettingsNotifyDigest = "email"
+	SettingsNotifyDigestOff   SettingsNotifyDigest = "off"
+	SettingsNotifyDigestPush  SettingsNotifyDigest = "push"
+)
+
+// Defines values for SettingsNotifyFeedRiver.
+const (
+	SettingsNotifyFeedRiverBoth  SettingsNotifyFeedRiver = "both"
+	SettingsNotifyFeedRiverEmail SettingsNotifyFeedRiver = "email"
+	SettingsNotifyFeedRiverOff   SettingsNotifyFeedRiver = "off"
+	SettingsNotifyFeedRiverPush  SettingsNotifyFeedRiver = "push"
+)
+
+// Defines values for SettingsNotifyLifecycle.
+const (
+	SettingsNotifyLifecycleBoth  SettingsNotifyLifecycle = "both"
+	SettingsNotifyLifecycleEmail SettingsNotifyLifecycle = "email"
+	SettingsNotifyLifecycleOff   SettingsNotifyLifecycle = "off"
+	SettingsNotifyLifecyclePush  SettingsNotifyLifecycle = "push"
 )
 
 // Defines values for UnderstoodQueryTypes.
@@ -338,8 +386,23 @@ type LensRuleTypes string
 
 // PatchSettingsRequest defines model for PatchSettingsRequest.
 type PatchSettingsRequest struct {
-	KindleEmail *openapi_types.Email `json:"kindleEmail,omitempty"`
+	KindleEmail      *openapi_types.Email                 `json:"kindleEmail,omitempty"`
+	NotifyDailyCap   *int                                 `json:"notifyDailyCap,omitempty"`
+	NotifyDigest     *PatchSettingsRequestNotifyDigest    `json:"notifyDigest,omitempty"`
+	NotifyFeedRiver  *PatchSettingsRequestNotifyFeedRiver `json:"notifyFeedRiver,omitempty"`
+	NotifyLifecycle  *PatchSettingsRequestNotifyLifecycle `json:"notifyLifecycle,omitempty"`
+	NotifyQuietHours *string                              `json:"notifyQuietHours,omitempty"`
+	NotifyTimezone   *string                              `json:"notifyTimezone,omitempty"`
 }
+
+// PatchSettingsRequestNotifyDigest defines model for PatchSettingsRequest.NotifyDigest.
+type PatchSettingsRequestNotifyDigest string
+
+// PatchSettingsRequestNotifyFeedRiver defines model for PatchSettingsRequest.NotifyFeedRiver.
+type PatchSettingsRequestNotifyFeedRiver string
+
+// PatchSettingsRequestNotifyLifecycle defines model for PatchSettingsRequest.NotifyLifecycle.
+type PatchSettingsRequestNotifyLifecycle string
 
 // Place defines model for Place.
 type Place struct {
@@ -411,7 +474,34 @@ type SearchResult struct {
 type Settings struct {
 	// KindleEmail Destination e-mail for Send-to-Kindle digests; absent if not configured.
 	KindleEmail *openapi_types.Email `json:"kindleEmail,omitempty"`
+
+	// NotifyDailyCap Maximum successful deliveries per day before non-lifecycle notifications defer. Default 10.
+	NotifyDailyCap *int `json:"notifyDailyCap,omitempty"`
+
+	// NotifyDigest Channels for Lens digest notifications. Default push.
+	NotifyDigest *SettingsNotifyDigest `json:"notifyDigest,omitempty"`
+
+	// NotifyFeedRiver Channels for coalesced feed-river activity. Default off.
+	NotifyFeedRiver *SettingsNotifyFeedRiver `json:"notifyFeedRiver,omitempty"`
+
+	// NotifyLifecycle Channels for save-failure notifications. Default push. Exempt from the daily cap.
+	NotifyLifecycle *SettingsNotifyLifecycle `json:"notifyLifecycle,omitempty"`
+
+	// NotifyQuietHours Wall-clock range in the user's timezone, e.g. 22:00-07:00. Empty means none.
+	NotifyQuietHours *string `json:"notifyQuietHours,omitempty"`
+
+	// NotifyTimezone IANA timezone used for quiet hours and the daily-cap reset, e.g. Europe/London.
+	NotifyTimezone *string `json:"notifyTimezone,omitempty"`
 }
+
+// SettingsNotifyDigest Channels for Lens digest notifications. Default push.
+type SettingsNotifyDigest string
+
+// SettingsNotifyFeedRiver Channels for coalesced feed-river activity. Default off.
+type SettingsNotifyFeedRiver string
+
+// SettingsNotifyLifecycle Channels for save-failure notifications. Default push. Exempt from the daily cap.
+type SettingsNotifyLifecycle string
 
 // UnderstoodQuery How a natural-language query was interpreted (present only when parse=true). Reflects the values actually searched.
 type UnderstoodQuery struct {

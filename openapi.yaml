@@ -844,10 +844,22 @@ components:
       type: object
       properties:
         kindleEmail: { type: string, format: email, description: "Destination e-mail for Send-to-Kindle digests; absent if not configured." }
+        notifyDigest: { type: string, enum: [off, push, email, both], description: "Channels for Lens digest notifications. Default push." }
+        notifyFeedRiver: { type: string, enum: [off, push, email, both], description: "Channels for coalesced feed-river activity. Default off." }
+        notifyLifecycle: { type: string, enum: [off, push, email, both], description: "Channels for save-failure notifications. Default push. Exempt from the daily cap." }
+        notifyQuietHours: { type: string, description: "Wall-clock range in the user's timezone, e.g. 22:00-07:00. Empty means none." }
+        notifyTimezone: { type: string, description: "IANA timezone used for quiet hours and the daily-cap reset, e.g. Europe/London." }
+        notifyDailyCap: { type: integer, description: "Maximum successful deliveries per day before non-lifecycle notifications defer. Default 10." }
     PatchSettingsRequest:
       type: object
       properties:
         kindleEmail: { type: string, format: email }
+        notifyDigest: { type: string, enum: [off, push, email, both] }
+        notifyFeedRiver: { type: string, enum: [off, push, email, both] }
+        notifyLifecycle: { type: string, enum: [off, push, email, both] }
+        notifyQuietHours: { type: string }
+        notifyTimezone: { type: string }
+        notifyDailyCap: { type: integer }
     RegisterPushDeviceRequest:
       type: object
       required: [token, platform]

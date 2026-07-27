@@ -8,11 +8,18 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/rohithgilla12/openmind/api/internal/api"
 	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
 
 type settingsResp struct {
-	KindleEmail *string `json:"kindleEmail"`
+	KindleEmail      *string `json:"kindleEmail"`
+	NotifyDigest     *string `json:"notifyDigest"`
+	NotifyFeedRiver  *string `json:"notifyFeedRiver"`
+	NotifyLifecycle  *string `json:"notifyLifecycle"`
+	NotifyQuietHours *string `json:"notifyQuietHours"`
+	NotifyTimezone   *string `json:"notifyTimezone"`
+	NotifyDailyCap   *int    `json:"notifyDailyCap"`
 }
 
 func getSettings(t *testing.T, url string) settingsResp {
@@ -142,5 +149,190 @@ func TestSettingsScoped(t *testing.T) {
 	}
 	if otherVal != "other@kindle.com" {
 		t.Errorf("other user setting = %q, want unaffected other@kindle.com", otherVal)
+	}
+}
+
+// TestGetSettingsDoesNotPersistDefaults asserts that fetching settings for a
+// user who has never set a preference does not write user_settings rows. An
+// absent row is what lets the documented default (notify.digest=push, etc.)
+// apply without a backfill; if GET silently wrote default rows on read,
+// upgrading an existing install would no longer be free.
+func TestGetSettingsDoesNotPersistDefaults(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+
+	got := getSettings(t, srv.URL)
+	if got.NotifyDigest != nil || got.NotifyFeedRiver != nil || got.NotifyLifecycle != nil ||
+		got.NotifyQuietHours != nil || got.NotifyTimezone != nil || got.NotifyDailyCap != nil {
+		t.Fatalf("fresh settings = %+v, want all notify fields absent", got)
+	}
+
+	rows, err := s.Queries.ListUserSettings(t.Context(), api.DevUserID)
+	if err != nil {
+		t.Fatalf("list user settings: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("user_settings rows after GET = %d, want 0 (GET must not persist defaults)", len(rows))
+	}
+}
+
+// TestNotificationPrefsRoundTrip covers setting all six notify.* preferences
+// in one PATCH, echoed back correctly, and reflected by a subsequent GET.
+func TestNotificationPrefsRoundTrip(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+
+	body := `{"notifyDigest":"both","notifyFeedRiver":"push","notifyQuietHours":"22:00-07:00","notifyTimezone":"Europe/London","notifyDailyCap":5}`
+	patch := doJSON(t, http.MethodPatch, srv.URL+"/settings", body)
+	defer patch.Body.Close()
+	if patch.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d, want 200", patch.StatusCode)
+	}
+	var got settingsResp
+	if err := json.NewDecoder(patch.Body).Decode(&got); err != nil {
+		t.Fatalf("decode patch: %v", err)
+	}
+	assertPrefs(t, "patch echo", got, "both", "push", "22:00-07:00", "Europe/London", 5)
+
+	got = getSettings(t, srv.URL)
+	assertPrefs(t, "get after patch", got, "both", "push", "22:00-07:00", "Europe/London", 5)
+}
+
+func assertPrefs(t *testing.T, label string, got settingsResp, digest, feedRiver, quietHours, timezone string, dailyCap int) {
+	t.Helper()
+	if got.NotifyDigest == nil || *got.NotifyDigest != digest {
+		t.Errorf("%s: NotifyDigest = %v, want %s", label, got.NotifyDigest, digest)
+	}
+	if got.NotifyFeedRiver == nil || *got.NotifyFeedRiver != feedRiver {
+		t.Errorf("%s: NotifyFeedRiver = %v, want %s", label, got.NotifyFeedRiver, feedRiver)
+	}
+	if got.NotifyQuietHours == nil || *got.NotifyQuietHours != quietHours {
+		t.Errorf("%s: NotifyQuietHours = %v, want %s", label, got.NotifyQuietHours, quietHours)
+	}
+	if got.NotifyTimezone == nil || *got.NotifyTimezone != timezone {
+		t.Errorf("%s: NotifyTimezone = %v, want %s", label, got.NotifyTimezone, timezone)
+	}
+	if got.NotifyDailyCap == nil || *got.NotifyDailyCap != dailyCap {
+		t.Errorf("%s: NotifyDailyCap = %v, want %d", label, got.NotifyDailyCap, dailyCap)
+	}
+}
+
+// TestPatchSettingsRejectsBadQuietHours asserts a malformed quiet-hours
+// string is rejected with 400 and never reaches the store.
+func TestPatchSettingsRejectsBadQuietHours(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+
+	resp := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"notifyQuietHours":"bedtime"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestPatchSettingsRejectsBadTimezone asserts an unknown IANA zone is
+// rejected with 400.
+func TestPatchSettingsRejectsBadTimezone(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+
+	resp := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"notifyTimezone":"Mars/Olympus"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestPatchSettingsRejectsOutOfRangeDailyCap asserts a cap outside [0, 200]
+// is rejected with 400 before any write happens.
+func TestPatchSettingsRejectsOutOfRangeDailyCap(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+
+	resp := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"notifyDailyCap":500}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestPatchSettingsRejectsBeforeWritingAnyField asserts that when a request
+// body mixes a valid field with an invalid one, nothing is written: the
+// valid field (notifyDigest, processed earlier) must not have been persisted
+// just because a later field (notifyTimezone) failed validation. Validating
+// every field up front, before any store call, is what the global "no
+// partially-applied PATCH" rule requires.
+func TestPatchSettingsRejectsBeforeWritingAnyField(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+
+	resp := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"notifyDigest":"both","notifyTimezone":"Mars/Olympus"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+
+	got := getSettings(t, srv.URL)
+	if got.NotifyDigest != nil {
+		t.Errorf("notifyDigest = %v, want untouched (absent) since the whole PATCH was rejected", *got.NotifyDigest)
+	}
+}
+
+// TestPatchSettingsOmittedFieldLeavesUntouched is the crux of the PATCH
+// contract: a field absent from the request body must be left exactly as it
+// was, while a field present as an explicit empty string must be cleared
+// back to its default. A second PATCH that only sets notifyFeedRiver must
+// not disturb notifyDigest or notifyTimezone set by the first; a third PATCH
+// that explicitly clears notifyDigest must not disturb notifyTimezone.
+func TestPatchSettingsOmittedFieldLeavesUntouched(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+
+	first := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"notifyDigest":"email","notifyTimezone":"Europe/London"}`)
+	first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first patch status = %d, want 200", first.StatusCode)
+	}
+
+	second := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"notifyFeedRiver":"push"}`)
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("second patch status = %d, want 200", second.StatusCode)
+	}
+	var afterSecond settingsResp
+	if err := json.NewDecoder(second.Body).Decode(&afterSecond); err != nil {
+		t.Fatalf("decode second patch: %v", err)
+	}
+	if afterSecond.NotifyDigest == nil || *afterSecond.NotifyDigest != "email" {
+		t.Errorf("after omitting notifyDigest: got %v, want untouched email", afterSecond.NotifyDigest)
+	}
+	if afterSecond.NotifyTimezone == nil || *afterSecond.NotifyTimezone != "Europe/London" {
+		t.Errorf("after omitting notifyTimezone: got %v, want untouched Europe/London", afterSecond.NotifyTimezone)
+	}
+	if afterSecond.NotifyFeedRiver == nil || *afterSecond.NotifyFeedRiver != "push" {
+		t.Errorf("NotifyFeedRiver = %v, want push", afterSecond.NotifyFeedRiver)
+	}
+
+	third := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"notifyDigest":""}`)
+	defer third.Body.Close()
+	if third.StatusCode != http.StatusOK {
+		t.Fatalf("third patch status = %d, want 200", third.StatusCode)
+	}
+	var afterThird settingsResp
+	if err := json.NewDecoder(third.Body).Decode(&afterThird); err != nil {
+		t.Fatalf("decode third patch: %v", err)
+	}
+	if afterThird.NotifyDigest != nil {
+		t.Errorf("NotifyDigest after explicit clear = %v, want absent", *afterThird.NotifyDigest)
+	}
+	if afterThird.NotifyTimezone == nil || *afterThird.NotifyTimezone != "Europe/London" {
+		t.Errorf("NotifyTimezone after unrelated clear = %v, want untouched Europe/London", afterThird.NotifyTimezone)
 	}
 }
