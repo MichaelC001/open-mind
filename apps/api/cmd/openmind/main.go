@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -138,7 +139,12 @@ func run(ctx context.Context, args []string) error {
 	// back on the service (River is a settable field) so enqueue works.
 	feedSvc := feeds.NewService(s)
 
-	kindleDeps := kindleDepsFromEnv()
+	// The SMTP mailer is shared by Send-to-Kindle and the e-mail notification
+	// channel — both are plain uses of the same SMTP transport, so it's built
+	// once here rather than twice from the same env vars.
+	smtpMailer := smtpMailerFromEnv()
+
+	kindleDeps := kindleDepsFromEnv(smtpMailer)
 	if kindleDeps.Configured {
 		if kindleDeps.To != "" {
 			slog.Info("send-to-kindle configured", "to", kindleDeps.To)
@@ -179,12 +185,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	slog.Info("reel media", "mode", reelMode.String(), "deep_media", reelExtractor != nil)
 
-	// TODO(task 10): replace this stopgap with env-driven construction
-	// (NOTIFY_CHANNELS, Expo access token, mailer wiring). Until then the
-	// router is all-noop and Configured is false, so the flush job still
-	// runs, claims and stamps every due row as delivered (draining the
-	// outbox so it never backs up), without ever actually sending anything.
-	notifyDeps := jobs.NotifyDeps{Router: notify.NewRouter(notify.NewNoop(), notify.NewNoop()), Configured: false}
+	notifyDeps := buildNotifyDeps(smtpMailer)
 
 	switch cmd {
 	case "serve":
@@ -223,20 +224,17 @@ func run(ctx context.Context, args []string) error {
 	}
 }
 
-// kindleDepsFromEnv reads the Send-to-Kindle SMTP configuration from the
-// environment. Configured is true when SMTP_HOST and SMTP_FROM (the SMTP
-// transport) are both set — without them there's no way to send mail at
-// all, so the feature stays off regardless of KINDLE_EMAIL. KINDLE_EMAIL is
-// optional: when set it becomes Deps.To, the server-wide fallback recipient
-// used when a user hasn't set their own kindle_email setting; when unset,
-// Deps.To is empty and every send relies on a per-user setting instead.
+// smtpMailerFromEnv builds the SMTP mailer shared by Send-to-Kindle and the
+// e-mail notification channel from SMTP_HOST, SMTP_PORT, SMTP_FROM,
+// SMTP_USERNAME, and SMTP_PASSWORD. It returns nil when SMTP_HOST or
+// SMTP_FROM is unset — without both there's no way to send mail at all, so
+// every mail-dependent feature must treat a nil return as "not configured".
 // SMTP_PASSWORD is intentionally never logged.
-func kindleDepsFromEnv() jobs.KindleDeps {
+func smtpMailerFromEnv() mailer.Mailer {
 	host := os.Getenv("SMTP_HOST")
 	from := os.Getenv("SMTP_FROM")
-	to := os.Getenv("KINDLE_EMAIL")
 	if host == "" || from == "" {
-		return jobs.KindleDeps{}
+		return nil
 	}
 	port := defaultSMTPPort
 	if v := os.Getenv("SMTP_PORT"); v != "" {
@@ -253,7 +251,71 @@ func kindleDepsFromEnv() jobs.KindleDeps {
 		Password: os.Getenv("SMTP_PASSWORD"),
 		From:     from,
 	}
-	return jobs.KindleDeps{Mailer: mailer.New(cfg), To: to, Configured: true}
+	return mailer.New(cfg)
+}
+
+// kindleDepsFromEnv builds the Send-to-Kindle worker config from the shared
+// SMTP mailer (nil when SMTP isn't configured, in which case the feature
+// stays off regardless of KINDLE_EMAIL) and the optional KINDLE_EMAIL
+// server-wide fallback recipient. KINDLE_EMAIL is optional: when set it
+// becomes Deps.To, used when a user hasn't set their own kindle_email
+// setting; when unset, Deps.To is empty and every send relies on a per-user
+// setting instead.
+func kindleDepsFromEnv(m mailer.Mailer) jobs.KindleDeps {
+	if m == nil {
+		return jobs.KindleDeps{}
+	}
+	return jobs.KindleDeps{Mailer: m, To: os.Getenv("KINDLE_EMAIL"), Configured: true}
+}
+
+// buildNotifyDeps assembles the notification delivery router from
+// NOTIFY_CHANNELS, a comma-separated list of "expo" and/or "email". An empty
+// or unset value leaves both channels as noop senders, which keeps the app
+// fully functional with no delivery configured: producers still enqueue, the
+// flush still stamps every due row as handled, and nothing is sent or errors.
+//
+// Configured must reflect whether a real (non-noop) sender actually ended up
+// wired, not merely whether a channel was requested — the flush job uses
+// Configured to decide whether a zero-result delivery means "nothing is
+// configured, stamp the row anyway" or "a real channel should have delivered
+// and didn't, leave it pending". Router.Enabled() already encodes exactly
+// that distinction, so it's reused here rather than re-derived from the
+// channel set — which matters for e.g. NOTIFY_CHANNELS=email with no SMTP
+// configured, where the channel is requested but the sender stays noop.
+func buildNotifyDeps(m mailer.Mailer) jobs.NotifyDeps {
+	channels := map[string]bool{}
+	for _, c := range strings.Split(os.Getenv("NOTIFY_CHANNELS"), ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			channels[c] = true
+		}
+	}
+	for c := range channels {
+		if c != "expo" && c != "email" {
+			slog.Warn("unknown NOTIFY_CHANNELS value; ignoring", "channel", c)
+		}
+	}
+
+	push, email := notify.NewNoop(), notify.NewNoop()
+	var receipts jobs.ReceiptChecker
+
+	if channels["expo"] {
+		e := notify.NewExpo(os.Getenv("EXPO_ACCESS_TOKEN"))
+		push, receipts = e, e
+	}
+	if channels["email"] {
+		if m == nil {
+			slog.Warn("NOTIFY_CHANNELS includes email but SMTP is not configured; e-mail notifications disabled")
+		} else {
+			email = notify.NewEmail(m)
+		}
+	}
+
+	router := notify.NewRouter(push, email)
+	configured := router.Enabled()
+	if !configured {
+		slog.Info("no notification channels configured; notifications will be recorded but not delivered")
+	}
+	return jobs.NotifyDeps{Router: router, Receipts: receipts, Configured: configured}
 }
 
 // kindleConfigFromDeps translates the worker-facing jobs.KindleDeps into the

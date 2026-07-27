@@ -402,3 +402,18 @@ The SMTP transport (`SMTP_HOST` + `SMTP_FROM`) must be configured, and a recipie
 ### Scheduled Lens digests
 
 Any Lens can be sent on a schedule: pick **Daily** or **Weekly** (plus a weekday) in the Lens header. A scheduled digest contains only items that are **new since the last digest** (with an hour's grace for late-finishing enrichment) — nothing new means no e-mail. Scans run hourly from when the worker starts (times are UTC for weekly-day matching; per-user timezones aren't supported yet). The Lens header shows when the digest last went out.
+
+## Notifications
+
+Openmind can notify users about lifecycle events, feed-river digests, and other activity, over mobile push (Expo) and/or e-mail. Delivery is off by default — every notification is still recorded in the outbox and eventually pruned, but nothing is sent — until you set `NOTIFY_CHANNELS`.
+
+| Variable | Required | Description |
+|---|---|---|
+| `NOTIFY_CHANNELS` | no | Comma-separated list of channels to enable: `expo`, `email`, or both (e.g. `expo,email`). Leaving it empty is a fully supported configuration — the app stays completely functional with notifications recorded but never delivered. |
+| `EXPO_ACCESS_TOKEN` | no | Only used when `expo` is listed. Expo Push accepts unauthenticated requests; a token just adds send-security. Create one at [expo.dev](https://expo.dev) under Account Settings → Access Tokens. |
+
+The `email` channel reuses the same outbound SMTP transport as [Send to Kindle](#send-to-kindle) above — `SMTP_HOST` and `SMTP_FROM` must be set (plus `SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD` as needed). If `NOTIFY_CHANNELS` includes `email` but SMTP isn't configured, the server logs a warning at startup and leaves e-mail notifications disabled rather than failing to boot.
+
+The `expo` channel delivers to registered mobile devices, but registration only happens from a mobile app build that carries **your own Expo project ID** — the one shipped in this repo's `apps/mobile` points at the upstream project, not yours. If you build and distribute your own binary, you'll need your own Expo project (and, for production push, your own FCM and APNs credentials registered with that project) before device tokens can register at all; `EXPO_ACCESS_TOKEN` alone doesn't provide this.
+
+Restart the `api` service after changing either variable.
