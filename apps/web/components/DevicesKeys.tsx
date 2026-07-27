@@ -3,7 +3,8 @@
 import { tokens } from "@openmind/ui";
 import QRCode from "qrcode";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import type { ApiKey, ApiKeyCreated, DeviceLinkCreated, Settings } from "../lib/types";
+import { composeQuietHours, parseQuietHours } from "../lib/quiet-hours";
+import type { ApiKey, ApiKeyCreated, DeviceLinkCreated, PatchSettingsRequest, Settings } from "../lib/types";
 
 const { color, font } = tokens;
 
@@ -38,6 +39,28 @@ const inputStyle: CSSProperties = {
   borderRadius: 10,
   padding: "10px 12px",
 };
+
+const fieldLabel: CSSProperties = {
+  display: "block",
+  fontFamily: font.sans,
+  fontSize: 12.5,
+  color: color.inkMuted,
+  marginBottom: 6,
+};
+
+const fieldGroup: CSSProperties = {
+  flex: "1 1 220px",
+  minWidth: 200,
+};
+
+type ChannelPref = "off" | "push" | "email" | "both";
+
+const CHANNEL_OPTIONS: { value: ChannelPref; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "push", label: "Push" },
+  { value: "email", label: "Email" },
+  { value: "both", label: "Both" },
+];
 
 function formatDate(iso?: string): string {
   if (!iso) return "never";
@@ -451,6 +474,269 @@ function ConnectDeviceSection() {
   );
 }
 
+function NotificationsSection() {
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [digest, setDigest] = useState<ChannelPref>("push");
+  const [feedRiver, setFeedRiver] = useState<ChannelPref>("off");
+  const [lifecycle, setLifecycle] = useState<ChannelPref>("push");
+  const [quietStart, setQuietStart] = useState("");
+  const [quietEnd, setQuietEnd] = useState("");
+  const [timezone, setTimezone] = useState("");
+  const [dailyCap, setDailyCap] = useState("10");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadFailed(false);
+    fetch("/api/settings")
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+      .then((data: Settings) => {
+        if (cancelled) return;
+        setSettings(data);
+        setDigest((data.notifyDigest as ChannelPref | undefined) ?? "push");
+        setFeedRiver((data.notifyFeedRiver as ChannelPref | undefined) ?? "off");
+        setLifecycle((data.notifyLifecycle as ChannelPref | undefined) ?? "push");
+        const { start, end } = parseQuietHours(data.notifyQuietHours ?? "");
+        setQuietStart(start);
+        setQuietEnd(end);
+        // The server only reports a timezone once the user has set one —
+        // until then, prefill with the browser's zone rather than "UTC" so
+        // nobody has to look up their own IANA name.
+        setTimezone(data.notifyTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
+        setDailyCap(String(data.notifyDailyCap ?? 10));
+      })
+      .catch(() => {
+        if (!cancelled) setLoadFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadAttempt]);
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSaved(false);
+
+    const cap = Number.parseInt(dailyCap, 10);
+    if (!Number.isInteger(cap) || cap < 0 || cap > 200) {
+      setError("Daily cap must be a whole number between 0 and 200.");
+      return;
+    }
+
+    const body: PatchSettingsRequest = {
+      notifyDigest: digest,
+      notifyFeedRiver: feedRiver,
+      notifyLifecycle: lifecycle,
+      // Always sent explicitly — composeQuietHours returns "" when either
+      // side is blank, and an explicit "" is what clears the setting on the
+      // server. Omitting the field entirely would mean "leave unchanged"
+      // and the control would appear to do nothing.
+      notifyQuietHours: composeQuietHours(quietStart, quietEnd),
+      notifyTimezone: timezone.trim(),
+      notifyDailyCap: cap,
+    };
+
+    setBusy(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.status === 400) {
+        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        setError(payload?.error ?? "Couldn't save — check the values above.");
+        return;
+      }
+      if (!res.ok) throw new Error("save failed");
+      const data = (await res.json()) as Settings;
+      setSettings(data);
+      setDigest((data.notifyDigest as ChannelPref | undefined) ?? "push");
+      setFeedRiver((data.notifyFeedRiver as ChannelPref | undefined) ?? "off");
+      setLifecycle((data.notifyLifecycle as ChannelPref | undefined) ?? "push");
+      const { start, end } = parseQuietHours(data.notifyQuietHours ?? "");
+      setQuietStart(start);
+      setQuietEnd(end);
+      setTimezone(data.notifyTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
+      setDailyCap(String(data.notifyDailyCap ?? 10));
+      setSaved(true);
+    } catch {
+      setError("Couldn't save. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={card}>
+      <div style={sectionTitle}>Notifications</div>
+      <p
+        className="meta"
+        style={{ textTransform: "none", letterSpacing: ".02em", color: color.inkFaintAlt, margin: "6px 0 4px" }}
+      >
+        This is where notifications are configured — push notifications arrive on your linked mobile
+        devices, not in this browser. The web app never shows a notification itself.
+      </p>
+
+      {loadFailed && settings === null ? (
+        <button
+          type="button"
+          onClick={() => setLoadAttempt((n) => n + 1)}
+          style={{
+            display: "block",
+            margin: "6px 0 16px",
+            font: `500 11px/1 ${font.mono}`,
+            letterSpacing: ".02em",
+            color: color.terracotta,
+            background: color.noteSurface,
+            border: `1px solid ${color.terracotta}`,
+            borderRadius: 20,
+            padding: "6px 12px",
+            cursor: "pointer",
+          }}
+        >
+          Couldn&apos;t load settings — retry
+        </button>
+      ) : settings === null ? null : (
+        <form onSubmit={handleSave} style={{ marginTop: 14 }}>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
+            <div style={fieldGroup}>
+              <label style={fieldLabel} htmlFor="notify-digest">
+                Lens digests
+              </label>
+              <select
+                id="notify-digest"
+                value={digest}
+                onChange={(e) => setDigest(e.target.value as ChannelPref)}
+                style={{ ...inputStyle, width: "100%" }}
+              >
+                {CHANNEL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={fieldGroup}>
+              <label style={fieldLabel} htmlFor="notify-feed-river">
+                Feed activity
+              </label>
+              <select
+                id="notify-feed-river"
+                value={feedRiver}
+                onChange={(e) => setFeedRiver(e.target.value as ChannelPref)}
+                style={{ ...inputStyle, width: "100%" }}
+              >
+                {CHANNEL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={fieldGroup}>
+              <label style={fieldLabel} htmlFor="notify-lifecycle">
+                Save failures
+              </label>
+              <select
+                id="notify-lifecycle"
+                value={lifecycle}
+                onChange={(e) => setLifecycle(e.target.value as ChannelPref)}
+                style={{ ...inputStyle, width: "100%" }}
+              >
+                {CHANNEL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
+            <div style={fieldGroup}>
+              <label style={fieldLabel} htmlFor="notify-quiet-start">
+                Quiet hours
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  id="notify-quiet-start"
+                  type="time"
+                  value={quietStart}
+                  onChange={(e) => setQuietStart(e.target.value)}
+                  aria-label="Quiet hours start"
+                  style={{ ...inputStyle, flex: "1 1 auto" }}
+                />
+                <span style={{ fontFamily: font.mono, fontSize: 12, color: color.inkFaintAlt }}>to</span>
+                <input
+                  type="time"
+                  value={quietEnd}
+                  onChange={(e) => setQuietEnd(e.target.value)}
+                  aria-label="Quiet hours end"
+                  style={{ ...inputStyle, flex: "1 1 auto" }}
+                />
+              </div>
+              <p style={{ fontFamily: font.sans, fontSize: 11.5, color: color.inkFaintAlt, margin: "6px 0 0" }}>
+                Leave either side blank to turn quiet hours off.
+              </p>
+            </div>
+
+            <div style={fieldGroup}>
+              <label style={fieldLabel} htmlFor="notify-timezone">
+                Timezone
+              </label>
+              <input
+                id="notify-timezone"
+                value={timezone}
+                onChange={(e) => setTimezone(e.target.value)}
+                placeholder="Europe/London"
+                style={{ ...inputStyle, width: "100%" }}
+              />
+            </div>
+
+            <div style={fieldGroup}>
+              <label style={fieldLabel} htmlFor="notify-daily-cap">
+                Daily cap
+              </label>
+              <input
+                id="notify-daily-cap"
+                type="number"
+                min={0}
+                max={200}
+                value={dailyCap}
+                onChange={(e) => setDailyCap(e.target.value)}
+                style={{ ...inputStyle, width: "100%" }}
+              />
+              <p style={{ fontFamily: font.sans, fontSize: 11.5, color: color.inkFaintAlt, margin: "6px 0 0" }}>
+                Save-failure alerts always get through, regardless of this cap.
+              </p>
+            </div>
+          </div>
+
+          <button type="submit" className="savebtn" disabled={busy} style={{ opacity: busy ? 0.6 : 1 }}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </form>
+      )}
+
+      {error ? (
+        <p role="alert" style={errorStyle}>
+          {error}
+        </p>
+      ) : saved ? (
+        <p style={{ fontFamily: font.mono, fontSize: 12, color: color.green, margin: "10px 0 0" }}>Saved.</p>
+      ) : null}
+    </div>
+  );
+}
+
 function KindleSection() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [value, setValue] = useState("");
@@ -581,6 +867,7 @@ export function DevicesKeys() {
     <div style={{ display: "flex", flexDirection: "column", gap: 24, maxWidth: 720 }}>
       <ConnectDeviceSection />
       <KeysSection />
+      <NotificationsSection />
       <KindleSection />
     </div>
   );
