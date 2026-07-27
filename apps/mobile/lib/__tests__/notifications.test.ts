@@ -11,13 +11,32 @@ jest.mock("expo-notifications", () => ({
   getPermissionsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
   getExpoPushTokenAsync: jest.fn(),
+  setNotificationHandler: jest.fn(),
 }));
 jest.mock("expo-constants", () => ({
   __esModule: true,
   default: { expoConfig: { extra: { eas: { projectId: "test-project-id" } } } },
 }));
 
+import * as Notifications from "expo-notifications";
 import { routeForNotificationData } from "../notifications";
+
+// Regression test for the whole-branch review's I2 finding: with no handler
+// installed, expo-notifications silently suppresses any notification that
+// arrives while the app is in the foreground — which is essentially always,
+// for both notifyDrained and any server push landing while the app is open.
+describe("foreground notification handler", () => {
+  it("is installed at import time and shows banner + list without sound or badge", async () => {
+    expect(Notifications.setNotificationHandler).toHaveBeenCalledTimes(1);
+    const handler = (Notifications.setNotificationHandler as jest.Mock).mock.calls[0][0];
+    await expect(handler.handleNotification()).resolves.toEqual({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+    });
+  });
+});
 
 describe("routeForNotificationData", () => {
   it("routes an item notification to the real item detail screen", () => {

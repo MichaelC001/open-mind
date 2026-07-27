@@ -44,7 +44,12 @@ func Coalesce(c Category, pending []Notification) []Notification {
 
 	// A roll-up spanning several feeds has no single sensible deep-link
 	// target, so it carries no feed_id and the client opens the river root.
-	if len(feeds) == 1 {
+	// len(feeds) can be 0, not just 1 or many: a row whose data payload
+	// failed to unmarshal falls back to an empty map in rowsFor, so it never
+	// contributes a feed_id here. That must render the same single-feed-less
+	// phrasing as the true single-feed case, not "N new items across 0
+	// feeds" — there's no "0 feeds" to name.
+	if len(feeds) <= 1 {
 		for fid := range feeds {
 			out.Data["feed_id"] = fid
 		}

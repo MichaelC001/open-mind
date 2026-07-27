@@ -16,6 +16,22 @@ export type RegisterResult =
 
 const PUSH_TOKEN_KEY = "openmind.pushToken";
 
+// Without a handler installed, expo-notifications suppresses any notification
+// that arrives while the app is in the foreground — which is essentially
+// always for notifyDrained (fired from AppState going active / NetInfo
+// reconnect) and for any server push that lands while the app happens to be
+// open. This must run at module scope so it registers as soon as this file
+// is imported (which app/_layout.tsx already does for
+// routeForNotificationData), before any notification can arrive.
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});
+
 /**
  * The Expo push token this device last successfully registered with the
  * server, or null if push has never been enabled (or was disabled since).

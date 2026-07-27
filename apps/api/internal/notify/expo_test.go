@@ -121,6 +121,56 @@ func TestExpoPerTicketErrorsFallbackToMessage(t *testing.T) {
 	}
 }
 
+// TestExpoReceiptsChunksTicketIDs proves Receipts splits >1000 ticket IDs
+// across requests, mirroring TestExpoBatchesTokens for Send: Expo's
+// getReceipts endpoint caps a single call at 1000 IDs, and posting more than
+// that in one request previously made check_receipts fail identically on
+// every retry once ledger-row duplication pushed a busy instance past that
+// count within its one-hour lookback (the I3 finding).
+func TestExpoReceiptsChunksTicketIDs(t *testing.T) {
+	var batchSizes []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			IDs []string `json:"ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decoding body: %v", err)
+		}
+		batchSizes = append(batchSizes, len(body.IDs))
+		data := make(map[string]any, len(body.IDs))
+		for _, id := range body.IDs {
+			data[id] = map[string]any{"status": "ok"}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer srv.Close()
+
+	e := NewExpo("")
+	e.BaseURL = srv.URL
+
+	ids := make([]string, 2500)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("ticket-%d", i)
+	}
+
+	got, err := e.Receipts(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("Receipts: %v", err)
+	}
+	if len(got) != 2500 {
+		t.Errorf("results = %d, want 2500", len(got))
+	}
+	want := []int{1000, 1000, 500}
+	if len(batchSizes) != len(want) {
+		t.Fatalf("batches = %v, want %v", batchSizes, want)
+	}
+	for i, n := range want {
+		if batchSizes[i] != n {
+			t.Errorf("batch %d = %d, want %d", i, batchSizes[i], n)
+		}
+	}
+}
+
 // Receipts translate a ticket ID to its terminal error code, which is the only
 // place DeviceNotRegistered actually surfaces.
 func TestExpoReceipts(t *testing.T) {

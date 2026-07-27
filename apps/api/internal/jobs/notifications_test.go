@@ -1,8 +1,11 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -376,6 +379,93 @@ func TestFlushChannelEnabledButServerWiredToNoopIsStamped(t *testing.T) {
 	}
 	if attempts == 0 {
 		t.Errorf("attempts = 0; row was deferred as if it had no destination at all, rather than claimed and stamped under noop semantics")
+	}
+}
+
+// TestFlushMisconfiguredChannelLogsAtInfo is the regression test for I4: on
+// a partially-configured instance (e.g. NOTIFY_CHANNELS=expo with SMTP
+// unset, or vice versa), a user whose category preference points at the
+// channel the server never wired up has that row stamped-and-dropped on its
+// very first scan with no defer and no retry. Before this fix that path
+// carried no logging at all, so an operator watching an "email-only"
+// self-host's logs would see nothing to explain why push-preferring users
+// receive nothing. It must log at Info (not Debug, which is off by default)
+// and name the category, so the exact user_settings row to fix is
+// identifiable from the log line alone.
+func TestFlushMisconfiguredChannelLogsAtInfo(t *testing.T) {
+	var buf bytes.Buffer
+	prevDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevDefault)
+
+	s := testStore(t)
+	ctx := context.Background()
+	uid := uuid.New()
+	if err := s.Queries.EnsureUser(ctx, uid); err != nil {
+		t.Fatalf("ensure user: %v", err)
+	}
+	if _, err := s.Pool.Exec(ctx, `UPDATE users SET email = $1 WHERE id = $2`, "user@example.com", uid); err != nil {
+		t.Fatalf("set email: %v", err)
+	}
+	if err := s.Queries.UpsertUserSetting(ctx, db.UpsertUserSettingParams{
+		UserID: uid, Key: notify.KeyDigest, Value: "email",
+	}); err != nil {
+		t.Fatalf("set pref: %v", err)
+	}
+
+	// NOTIFY_CHANNELS=expo in production: push is real, email is noop, and
+	// this user's digest preference points at the noop channel.
+	push := notify.NewFake()
+	push.ChannelName = "expo"
+	w := &FlushNotificationsWorker{
+		Store: s,
+		Deps:  NotifyDeps{Router: notify.NewRouter(push, notify.NewNoop())},
+	}
+	enqueue(t, w, uid, "digest", "digest:lens-a:2026-07-27", "Design digest", `{}`)
+
+	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "no live channel for this message; stamping without delivery") {
+		t.Fatalf("log output = %q, want the operator-visible line naming the misconfiguration", out)
+	}
+	if !strings.Contains(out, "level=INFO") {
+		t.Errorf("log output = %q, want Info level (Debug is off by default and would be invisible)", out)
+	}
+	if !strings.Contains(out, "category=digest") {
+		t.Errorf("log output = %q, want category=digest so the operator knows which preference to change", out)
+	}
+}
+
+// True noop mode (nothing configured anywhere) must stay quiet at Info level:
+// it is the documented default self-host state, already announced once at
+// startup, and logging every row would just be noise indistinguishable from
+// the I4 misconfiguration case this fix is meant to surface.
+func TestFlushNoopModeDoesNotLogAtInfo(t *testing.T) {
+	var buf bytes.Buffer
+	prevDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevDefault)
+
+	s := testStore(t)
+	ctx := context.Background()
+	uid := uuid.New()
+	if err := s.Queries.EnsureUser(ctx, uid); err != nil {
+		t.Fatalf("ensure user: %v", err)
+	}
+	w := &FlushNotificationsWorker{
+		Store: s,
+		Deps:  NotifyDeps{Router: notify.NewRouter(notify.NewNoop(), notify.NewNoop())},
+	}
+	enqueue(t, w, uid, "digest", "digest:lens-a:2026-07-27", "Design digest", `{}`)
+
+	if err := w.Work(ctx, &river.Job[FlushNotificationsArgs]{Args: FlushNotificationsArgs{UserID: uid}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if out := buf.String(); strings.Contains(out, "level=INFO") {
+		t.Errorf("log output = %q, want no Info-level line in true noop mode", out)
 	}
 }
 

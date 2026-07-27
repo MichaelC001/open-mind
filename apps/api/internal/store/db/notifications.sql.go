@@ -209,9 +209,10 @@ func (q *Queries) ListPushDevices(ctx context.Context, userID uuid.UUID) ([]List
 }
 
 const listRecentTickets = `-- name: ListRecentTickets :many
-SELECT ticket_id, token FROM notification_deliveries
+SELECT DISTINCT ticket_id, token FROM notification_deliveries
 WHERE channel = 'expo' AND ok AND ticket_id <> '' AND token <> ''
   AND sent_at > now() - interval '1 hour'
+LIMIT 5000
 `
 
 type ListRecentTicketsRow struct {
@@ -220,7 +221,18 @@ type ListRecentTicketsRow struct {
 }
 
 // The receipt job needs the token, not just the ticket, so it can retire a
-// device Expo reports as unregistered.
+// device Expo reports as unregistered. DISTINCT matters here: deliverOne
+// writes one ledger row per (result x source row), so a single coalesced
+// feed-river message covering several source rows on the same device writes
+// several ledger rows for one ticket_id — without DISTINCT that duplication
+// alone could push the row count past Expo's per-request cap well below any
+// realistic push volume. LIMIT bounds the work done per run on a busy
+// instance; the receipts job runs every 15 minutes, so a bounded backlog
+// drains within a few cycles rather than growing unboundedly in one query.
+//
+// Deliberately unscoped: this is global periodic maintenance across every
+// user's outbox, not a per-user read, so a user_id predicate would defeat it
+// the same way it would for ListUsersWithDueNotifications.
 func (q *Queries) ListRecentTickets(ctx context.Context) ([]ListRecentTicketsRow, error) {
 	rows, err := q.db.Query(ctx, listRecentTickets)
 	if err != nil {
@@ -323,6 +335,10 @@ WHERE (sent_at IS NOT NULL AND sent_at < now() - interval '30 days')
 // user never registers a push device or e-mail, so it is never claimed and
 // never exhausts attempts on its own. Without this third clause such a row
 // would sit in the pending partial index forever.
+//
+// Deliberately unscoped: retention is global periodic maintenance over the
+// whole outbox, not a per-user operation, so a user_id predicate would defeat
+// it the same way it would for ListUsersWithDueNotifications.
 func (q *Queries) PruneNotifications(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneNotifications)
 	if err != nil {

@@ -56,6 +56,29 @@ func TestCoalesceFeedRiverSingleFeedKeepsDeepLink(t *testing.T) {
 	}
 }
 
+// TestCoalesceFeedRiverNoFeedIDsFallsBackToSingularPhrasing is the
+// regression test for M6: rowsFor falls back to an empty data map when a
+// row's payload fails to unmarshal, so a pending set can reach Coalesce with
+// zero feed_id contributions even though len(pending) > 0. Before the fix,
+// that produced "N new items across 0 feeds" — a phrasing with nothing
+// sensible to name.
+func TestCoalesceFeedRiverNoFeedIDsFallsBackToSingularPhrasing(t *testing.T) {
+	in := []Notification{
+		{ID: uuid.New(), Category: CategoryFeedRiver, Data: map[string]any{}},
+		{ID: uuid.New(), Category: CategoryFeedRiver, Data: map[string]any{}},
+	}
+	got := Coalesce(CategoryFeedRiver, in)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Title != "2 new items in a feed you follow" {
+		t.Errorf("Title = %q, want the single-feed-less phrasing, not \"across 0 feeds\"", got[0].Title)
+	}
+	if _, ok := got[0].Data["feed_id"]; ok {
+		t.Errorf("Data carries feed_id %v with no feed_id ever contributed; want none", got[0].Data["feed_id"])
+	}
+}
+
 func TestCoalesceEmpty(t *testing.T) {
 	if got := Coalesce(CategoryFeedRiver, nil); len(got) != 0 {
 		t.Errorf("len = %d, want 0", len(got))

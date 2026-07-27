@@ -247,6 +247,22 @@ func TestPatchSettingsRejectsBadTimezone(t *testing.T) {
 	}
 }
 
+// TestPatchSettingsRejectsLocalTimezone is the regression test for M7:
+// time.LoadLocation("Local") succeeds and resolves to the server process's
+// own system timezone, not the user's, so it must be rejected explicitly
+// rather than accepted as if it were a real IANA zone.
+func TestPatchSettingsRejectsLocalTimezone(t *testing.T) {
+	s, rc, _ := testDeps(t)
+	srv := httptest.NewServer(newSrv(t, s, rc, ""))
+	t.Cleanup(srv.Close)
+
+	resp := doJSON(t, http.MethodPatch, srv.URL+"/settings", `{"notifyTimezone":"Local"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
 // TestPatchSettingsRejectsOutOfRangeDailyCap asserts a cap outside [0, 200]
 // is rejected with 400 before any write happens.
 func TestPatchSettingsRejectsOutOfRangeDailyCap(t *testing.T) {

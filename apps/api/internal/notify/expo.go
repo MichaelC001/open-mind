@@ -19,6 +19,15 @@ const (
 // expoBatchSize is the maximum number of messages Expo accepts per request.
 const expoBatchSize = 100
 
+// expoReceiptBatchSize is the maximum number of ticket IDs Expo's
+// getReceipts endpoint accepts per request — a separate, larger cap from
+// expoBatchSize's push-send limit. Posting more than this in one call
+// returns a non-200 response, which previously made the whole receipts job
+// fail identically on every retry once ledger rows (inflated by one row per
+// result x source row for a coalesced message) passed this count within the
+// job's one-hour lookback.
+const expoReceiptBatchSize = 1000
+
 // expoTimeout bounds a single push or receipts call.
 const expoTimeout = 20 * time.Second
 
@@ -138,8 +147,29 @@ func (e *Expo) postBatch(ctx context.Context, msgs []expoMessage) ([]expoTicket,
 
 // Receipts maps each ticket ID to its terminal error code, or to the empty
 // string when the push was delivered. Unknown ticket IDs are simply absent
-// from the result.
+// from the result. Requests are chunked at expoReceiptBatchSize, mirroring
+// how Send chunks at expoBatchSize: a whole-chunk transport failure is
+// reported as an error, but earlier successfully-fetched chunks are still
+// merged into the returned map rather than discarded, since a caller
+// reconciling receipts benefits from a partial answer over none at all.
 func (e *Expo) Receipts(ctx context.Context, ticketIDs []string) (map[string]string, error) {
+	codes := map[string]string{}
+	for start := 0; start < len(ticketIDs); start += expoReceiptBatchSize {
+		end := min(start+expoReceiptBatchSize, len(ticketIDs))
+		batch, err := e.postReceiptsBatch(ctx, ticketIDs[start:end])
+		if err != nil {
+			return codes, fmt.Errorf("fetching receipts batch %d-%d: %w", start, end, err)
+		}
+		for id, code := range batch {
+			codes[id] = code
+		}
+	}
+	return codes, nil
+}
+
+// postReceiptsBatch fetches receipts for one chunk of ticket IDs, already
+// within Expo's per-request cap.
+func (e *Expo) postReceiptsBatch(ctx context.Context, ticketIDs []string) (map[string]string, error) {
 	if len(ticketIDs) == 0 {
 		return map[string]string{}, nil
 	}

@@ -80,7 +80,7 @@ func ParsePrefs(rows map[string]string) Prefs {
 		}
 	}
 	if v := rows[KeyTimezone]; v != "" {
-		if loc, err := time.LoadLocation(v); err == nil {
+		if loc, ok := parseTimezone(v); ok {
 			p.Location = loc
 		} else {
 			slog.Warn("notify: unknown timezone, using UTC", "value", v)
@@ -94,6 +94,24 @@ func ParsePrefs(rows map[string]string) Prefs {
 		}
 	}
 	return p
+}
+
+// parseTimezone loads v as an IANA zone. "Local" is explicitly rejected even
+// though time.LoadLocation accepts it: it resolves to the server process's
+// own system timezone, not the user's, which would silently evaluate quiet
+// hours in the wrong zone for a user who believes they've set their own —
+// see validTimezone in internal/api/settings.go, which rejects it for the
+// same reason at write time. Rejecting it again here is defence in depth for
+// a row written before that validation existed, or written directly.
+func parseTimezone(v string) (*time.Location, bool) {
+	if v == "Local" {
+		return nil, false
+	}
+	loc, err := time.LoadLocation(v)
+	if err != nil {
+		return nil, false
+	}
+	return loc, true
 }
 
 // parseChannels maps off|push|email|both onto Channels. An unrecognised value

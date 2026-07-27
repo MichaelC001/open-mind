@@ -68,6 +68,56 @@ func TestCheckReceiptsRetiresUnregisteredDevice(t *testing.T) {
 	}
 }
 
+// TestListRecentTicketsDeduplicatesTicketIDs is the regression test for the
+// whole-branch review's I3 finding: deliverOne writes one ledger row per
+// (result x source row), so a single coalesced feed-river message spanning
+// several source rows delivered to one device writes several ledger rows
+// carrying the same ticket_id. Before the DISTINCT fix, ListRecentTickets
+// returned one row per ledger row rather than per ticket, inflating the
+// count posted to Expo's getReceipts endpoint far beyond the number of
+// actual outstanding tickets — the mechanism that let a busy instance wedge
+// check_receipts well below any realistic real push volume.
+func TestListRecentTicketsDeduplicatesTicketIDs(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	uid := uuid.New()
+	if err := s.Queries.EnsureUser(ctx, uid); err != nil {
+		t.Fatalf("ensure user: %v", err)
+	}
+	for _, key := range []string{"d1", "d2"} {
+		if err := s.Queries.EnqueueNotification(ctx, db.EnqueueNotificationParams{
+			UserID: uid, Category: "feed_river", DedupeKey: key, Title: "t", Body: "", Data: []byte(`{}`),
+		}); err != nil {
+			t.Fatalf("enqueue %s: %v", key, err)
+		}
+	}
+	due, err := s.Queries.ListDueNotifications(ctx, uid)
+	if err != nil {
+		t.Fatalf("list due: %v", err)
+	}
+	if len(due) != 2 {
+		t.Fatalf("due = %d, want 2", len(due))
+	}
+	// One ticket_id/token pair recorded once per source row, exactly as
+	// deliverOne does for a coalesced message's ledger writes.
+	for _, row := range due {
+		if err := s.Queries.RecordDelivery(ctx, db.RecordDeliveryParams{
+			UserID: uid, NotificationID: row.ID, Channel: "expo",
+			Token: "ExponentPushToken[x]", TicketID: "ticket-shared", Ok: true,
+		}); err != nil {
+			t.Fatalf("record delivery: %v", err)
+		}
+	}
+
+	rows, err := s.Queries.ListRecentTickets(ctx)
+	if err != nil {
+		t.Fatalf("list recent tickets: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("rows = %d, want 1 (deduplicated despite 2 ledger rows sharing one ticket_id)", len(rows))
+	}
+}
+
 // Re-running must be safe — the worker deliberately has no "checked" marker.
 func TestCheckReceiptsIsIdempotent(t *testing.T) {
 	s := testStore(t)

@@ -68,6 +68,18 @@ func TestParsePrefsBadValuesFallBack(t *testing.T) {
 	}
 }
 
+// TestParsePrefsRejectsLocalTimezone is the regression test for M7:
+// time.LoadLocation("Local") succeeds and resolves to the server process's
+// own system timezone, not the user's. Without an explicit rejection, a row
+// storing "Local" would silently evaluate that user's quiet hours in
+// whatever zone the server happens to be deployed in.
+func TestParsePrefsRejectsLocalTimezone(t *testing.T) {
+	p := ParsePrefs(map[string]string{"notify.timezone": "Local"})
+	if p.Location.String() != "UTC" {
+		t.Errorf("Location = %s, want UTC fallback, not the server's own zone", p.Location)
+	}
+}
+
 // An unrecognised channel value fails closed: it must resolve to off, not fall back
 // to the category default. This is correct because writes go through PATCH /settings,
 // which validates against the four allowed values (off, push, email, both), so an

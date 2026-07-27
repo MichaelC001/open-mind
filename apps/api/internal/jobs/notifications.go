@@ -281,7 +281,14 @@ func (w *FlushNotificationsWorker) deliverOne(ctx context.Context, uid uuid.UUID
 		}); err != nil {
 			return false, fmt.Errorf("deferring for no target: %w", err)
 		}
-		slog.Debug("flush_notifications: no destination for any enabled channel, deferring", "user_id", uid, "notification_id", n.ID)
+		// Info, not Debug: this is the only observable trace of a whole
+		// category of notification going nowhere (e.g. every user's rows on
+		// an email-only self-host whose category preferences still default
+		// to push), and Debug is off at default log level — an operator
+		// would otherwise see nothing but a slowly growing, silently
+		// self-clearing-after-30-days outbox.
+		slog.Info("flush_notifications: no destination for any enabled channel, deferring",
+			"user_id", uid, "notification_id", n.ID, "category", n.Category, "reason", "enabled channel has no registered device or e-mail address for this user")
 		return false, nil
 	}
 
@@ -326,6 +333,20 @@ func (w *FlushNotificationsWorker) deliverOne(ctx context.Context, uid uuid.UUID
 			// three scans (attempts exhausted, last_error never set, pruned
 			// after 7 days) instead of draining the outbox the way "noop
 			// keeps the app fully functional" is supposed to work.
+			//
+			// True noop mode (nothing configured anywhere) is expected and
+			// already announced once at startup by buildNotifyDeps, so
+			// logging every row here would just be noise. But when
+			// something *is* configured server-wide and this row's category
+			// preference simply doesn't point at it (e.g. an email-only
+			// self-host where digest/lifecycle still default to push), the
+			// row disappears just as silently and completely, on the very
+			// first scan — no defer, no retry, nothing — which is exactly
+			// the invisibility an operator needs surfaced.
+			if w.Deps.Router.Enabled() {
+				slog.Info("flush_notifications: no live channel for this message; stamping without delivery",
+					"user_id", uid, "notification_id", n.ID, "category", n.Category)
+			}
 			return true, w.stamp(ctx, uid, n.SourceIDs)
 		}
 		// A live channel was enabled and the no-target guard above already

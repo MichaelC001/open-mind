@@ -235,8 +235,15 @@ func validQuietHours(v string) bool {
 	return errFrom == nil && errTo == nil
 }
 
-// validTimezone accepts any IANA zone the runtime can load.
+// validTimezone accepts any IANA zone the runtime can load. "Local" is
+// rejected even though time.LoadLocation accepts it: it resolves to the
+// server's own system timezone, not the user's, so a user who stores it
+// would silently have their quiet hours evaluated against wherever the
+// server happens to be deployed rather than the zone they think they set.
 func validTimezone(v string) bool {
+	if v == "Local" {
+		return false
+	}
 	_, err := time.LoadLocation(v)
 	return err == nil
 }
