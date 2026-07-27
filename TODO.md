@@ -53,9 +53,6 @@
   discards the map on error; separately, `ListRecentTickets` `LIMIT 5000`
   without `ORDER BY` makes reconciliation arbitrary above 5000 tickets/hour —
   add `ORDER BY sent_at`.
-- Go test parallelism: suite races against shared `openmind_test` database at
-  default parallelism, needs `-p 1`. Pre-existing (fails on baseline 76efc55), but
-  `task test` as documented is unreliable.
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
