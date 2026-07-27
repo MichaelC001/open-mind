@@ -67,3 +67,17 @@ func TestParsePrefsBadValuesFallBack(t *testing.T) {
 		t.Errorf("quiet = %s-%s, want empty on garbage", p.QuietFrom, p.QuietTo)
 	}
 }
+
+// An unrecognised channel value fails closed: it must resolve to off, not fall back
+// to the category default. This is correct because writes go through PATCH /settings,
+// which validates against the four allowed values (off, push, email, both), so an
+// unrecognised value means a corrupt row. Silence is the safer failure mode for a
+// notification system than unexpected pushes.
+func TestParsePrefsUnknownChannelFailsClosed(t *testing.T) {
+	p := ParsePrefs(map[string]string{
+		"notify.digest": "sometimes",
+	})
+	if got := p.For(CategoryDigest); got.Push || got.Email {
+		t.Errorf("digest with corrupt value = %+v, want off (silence)", got)
+	}
+}

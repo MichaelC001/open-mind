@@ -62,6 +62,12 @@ func TestNextDeliverable(t *testing.T) {
 			prefs: Prefs{Location: london, QuietFrom: "22:00", QuietTo: "07:00"},
 			want:  time.Date(2026, 7, 28, 6, 0, 0, 0, time.UTC),
 		},
+		{
+			name:  "degenerate from == to is treated as no quiet hours",
+			now:   time.Date(2026, 7, 27, 13, 0, 0, 0, time.UTC),
+			prefs: Prefs{Location: time.UTC, QuietFrom: "09:00", QuietTo: "09:00"},
+			want:  time.Date(2026, 7, 27, 13, 0, 0, 0, time.UTC),
+		},
 	}
 
 	for _, tt := range tests {
