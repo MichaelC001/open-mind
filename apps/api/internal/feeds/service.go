@@ -17,6 +17,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/rohithgilla12/openmind/api/internal/enrich"
 	"github.com/rohithgilla12/openmind/api/internal/jobs"
+	"github.com/rohithgilla12/openmind/api/internal/notify"
 	"github.com/rohithgilla12/openmind/api/internal/store"
 	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
@@ -233,6 +234,25 @@ func (s *Service) saveEntries(ctx context.Context, userID uuid.UUID, feedID *uui
 		}
 		added++
 		ids = append(ids, item.ID)
+	}
+
+	// feedID is nil for Add's pre-persist backfill (the user is subscribing
+	// for the first time) and non-nil for Refresh's polls. Telling someone
+	// "50 new items" the instant they subscribe would be the single most
+	// annoying thing this feature could do, so only a poll on an existing
+	// subscription emits.
+	//
+	// One row per feed per hour: the flush job's Coalesce sums these into a
+	// single "N new items across M feeds" message. A single row per hour
+	// would be collapsed by the pending dedupe index and could never carry a
+	// count, so Coalesce would have nothing to sum.
+	if feedID != nil && added > 0 {
+		dedupe := fmt.Sprintf("feed_river:%s:%s", *feedID, time.Now().UTC().Format("2006-01-02T15"))
+		if err := jobs.EnqueueNotification(ctx, s.Store, userID, notify.CategoryFeedRiver, dedupe,
+			fmt.Sprintf("%d new items", added), "",
+			map[string]any{"feed_id": feedID.String(), "count": added}); err != nil {
+			slog.Error("saveEntries: enqueueing feed river notification", "feed_id", *feedID, "err", err)
+		}
 	}
 	return added, ids, nil
 }

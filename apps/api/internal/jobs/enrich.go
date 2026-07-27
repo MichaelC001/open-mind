@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/rohithgilla12/openmind/api/internal/enrich"
 	"github.com/rohithgilla12/openmind/api/internal/geo"
+	"github.com/rohithgilla12/openmind/api/internal/notify"
 	"github.com/rohithgilla12/openmind/api/internal/reelmedia"
 	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
@@ -44,6 +45,18 @@ type EnrichWorker struct {
 // itself succeeded, and a manual re-enrich re-offers the chance to enqueue.
 func (w *EnrichWorker) Work(ctx context.Context, job *river.Job[EnrichArgs]) error {
 	if err := w.Pipeline.Run(ctx, job.Args.UserID, job.Args.ItemID); err != nil {
+		// Only the final attempt notifies: intermediate retries are expected
+		// and invisible to the user. Successful enrichment stays silent by
+		// design — the item simply appearing in the Library is the success
+		// signal, which is the point of "capture is sacred".
+		if job.Attempt >= job.MaxAttempts {
+			if nerr := EnqueueNotification(ctx, w.Pipeline.Store, job.Args.UserID, notify.CategoryLifecycle,
+				fmt.Sprintf("lifecycle:enrich-failed:%s", job.Args.ItemID),
+				"We couldn't finish processing a save", "It's still in your Library — open it to retry.",
+				map[string]any{"item_id": job.Args.ItemID.String()}); nerr != nil {
+				slog.Error("enrich: enqueueing failure notification", "item_id", job.Args.ItemID, "err", nerr)
+			}
+		}
 		return err
 	}
 	if w.River == nil {

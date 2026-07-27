@@ -493,6 +493,40 @@ func (PruneNotificationsArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{Queue: notifyQueue}
 }
 
+// EnqueueNotification writes one outbox row. Producers call this and nothing
+// else: channels, preferences, coalescing, and retries are the flush job's
+// concern. ON CONFLICT DO NOTHING in the query (EnqueueNotification's SQL)
+// makes a re-run a no-op, so callers need no idempotency logic of their own.
+func EnqueueNotification(ctx context.Context, s *store.Store, userID uuid.UUID, cat notify.Category, dedupeKey, title, body string, data map[string]any) error {
+	payload := []byte("{}")
+	if len(data) > 0 {
+		encoded, err := json.Marshal(data)
+		if err != nil {
+			return fmt.Errorf("marshalling notification data: %w", err)
+		}
+		payload = encoded
+	}
+	if err := s.Queries.EnqueueNotification(ctx, db.EnqueueNotificationParams{
+		UserID:    userID,
+		Category:  string(cat),
+		DedupeKey: dedupeKey,
+		Title:     title,
+		Body:      body,
+		Data:      payload,
+	}); err != nil {
+		return fmt.Errorf("enqueueing notification: %w", err)
+	}
+	return nil
+}
+
+// plural renders "1 new save" / "7 new saves".
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
 // PruneNotificationsWorker enforces retention. Without it the outbox and its
 // ledger are the fastest-growing tables in the application, and abandoned rows
 // would occupy the pending partial index indefinitely.
