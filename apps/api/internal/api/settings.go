@@ -143,22 +143,45 @@ func (s *Server) PatchSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The seven writes below (six prefs plus the daily cap) are independent
+	// store calls, not one statement. Without a transaction, a store failure
+	// partway through (a dropped connection, a context deadline, a deadlock)
+	// would leave earlier fields committed and later ones missing — the same
+	// "partially-applied PATCH" the up-front validation above was written to
+	// prevent, just triggered by infrastructure rather than bad input. A
+	// single transaction makes the whole write phase atomic: every field
+	// commits together, or none do. Mirrors the pattern in
+	// CreateItemHighlight (highlights.go).
+	tx, err := s.store.Pool.Begin(ctx)
+	if err != nil {
+		slog.Error("beginning settings tx", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not update settings")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.store.Queries.WithTx(tx)
+
 	for _, pref := range prefs {
 		if pref.value == nil {
 			continue
 		}
-		if !s.applyPref(ctx, w, uid, pref.key, *pref.value) {
+		if !applyPref(ctx, w, q, uid, pref.key, *pref.value) {
 			return
 		}
 	}
 	if req.NotifyDailyCap != nil {
-		if err := s.store.Queries.UpsertUserSetting(ctx, db.UpsertUserSettingParams{
+		if err := q.UpsertUserSetting(ctx, db.UpsertUserSettingParams{
 			UserID: uid, Key: notify.KeyDailyCap, Value: strconv.Itoa(*req.NotifyDailyCap),
 		}); err != nil {
 			slog.Error("upserting daily cap", "err", err)
 			writeError(w, http.StatusInternalServerError, "could not update settings")
 			return
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Error("committing settings tx", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not update settings")
+		return
 	}
 
 	settings, ok := s.currentSettings(w, r)
@@ -168,20 +191,22 @@ func (s *Server) PatchSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, settings)
 }
 
-// applyPref clears or upserts one setting row. value has already passed its
-// validator (see PatchSettings) — this only performs the write, so it never
-// rejects. It reports false once it has already written an error response
-// for a store failure, so the caller can stop applying further fields.
-func (s *Server) applyPref(ctx context.Context, w http.ResponseWriter, uid uuid.UUID, key, value string) bool {
+// applyPref clears or upserts one setting row through q (either the
+// server's ordinary Queries or a tx-scoped one — see PatchSettings). value
+// has already passed its validator, so this only performs the write and
+// never rejects for bad input. It reports false once it has already written
+// an error response for a store failure, so the caller can stop applying
+// further fields.
+func applyPref(ctx context.Context, w http.ResponseWriter, q *db.Queries, uid uuid.UUID, key, value string) bool {
 	if value == "" {
-		if _, err := s.store.Queries.DeleteUserSetting(ctx, db.DeleteUserSettingParams{UserID: uid, Key: key}); err != nil {
+		if _, err := q.DeleteUserSetting(ctx, db.DeleteUserSettingParams{UserID: uid, Key: key}); err != nil {
 			slog.Error("deleting setting", "key", key, "err", err)
 			writeError(w, http.StatusInternalServerError, "could not update settings")
 			return false
 		}
 		return true
 	}
-	if err := s.store.Queries.UpsertUserSetting(ctx, db.UpsertUserSettingParams{UserID: uid, Key: key, Value: value}); err != nil {
+	if err := q.UpsertUserSetting(ctx, db.UpsertUserSettingParams{UserID: uid, Key: key, Value: value}); err != nil {
 		slog.Error("upserting setting", "key", key, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update settings")
 		return false
