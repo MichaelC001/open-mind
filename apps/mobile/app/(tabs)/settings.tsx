@@ -39,7 +39,8 @@ type NotifyStatus =
   | { kind: "idle" }
   | { kind: "denied" }
   | { kind: "unsupported" }
-  | { kind: "error" };
+  | { kind: "error" }
+  | { kind: "disableError" };
 
 export default function SettingsScreen() {
   const { settings, save, signOut } = useSettingsContext();
@@ -73,9 +74,20 @@ export default function SettingsScreen() {
     try {
       if (!next) {
         // Turning off never fires the OS prompt — just tell the server to
-        // stop delivering to this device's token.
+        // stop delivering to this device's token. If that call fails (offline,
+        // instance down, 500), the server still thinks this device is
+        // subscribed, so the toggle must snap back to on and say so — showing
+        // "off" here would tell the user their opt-out worked when it didn't,
+        // and they'd keep getting pushes with no idea why.
         const stored = await getStoredPushToken();
-        if (stored) await unregisterPushDevice(stored);
+        if (stored) {
+          const res = await unregisterPushDevice(stored);
+          if (!res.ok) {
+            setNotifyEnabled(true);
+            setNotifyStatus({ kind: "disableError" });
+            return;
+          }
+        }
         await setStoredPushToken(null);
         setNotifyEnabled(false);
         return;
@@ -371,6 +383,13 @@ function NotifyStatusMessage({ status }: { status: NotifyStatus }) {
       return (
         <Text style={[styles.status, { color: colors.danger }]}>
           Couldn't enable notifications — check your connection and try again.
+        </Text>
+      );
+    case "disableError":
+      return (
+        <Text style={[styles.status, { color: colors.danger }]}>
+          Couldn't reach your instance to turn notifications off — still on. Check your connection
+          and try again.
         </Text>
       );
     default:
