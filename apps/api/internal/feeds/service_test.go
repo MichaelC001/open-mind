@@ -42,7 +42,7 @@ func testService(t *testing.T) *Service {
 		t.Fatalf("truncating: %v", err)
 	}
 	st := store.New(pool)
-	river, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
+	river, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, jobs.NotifyDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
 	if err != nil {
 		t.Fatalf("river client: %v", err)
 	}

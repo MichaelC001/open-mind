@@ -286,7 +286,7 @@ func TestNewMCPBackendCaptureAndRead(t *testing.T) {
 		t.Fatalf("ensure user: %v", err)
 	}
 
-	riverClient, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
+	riverClient, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, jobs.NotifyDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
 	if err != nil {
 		t.Fatalf("new river client: %v", err)
 	}

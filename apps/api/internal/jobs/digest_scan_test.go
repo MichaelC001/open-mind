@@ -47,7 +47,7 @@ func newDigestScanTestStore(t *testing.T) (*store.Store, *river.Client[pgx.Tx]) 
 	if err := s.Queries.EnsureUser(ctx, digestScanTestUser); err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}
-	rc, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
+	rc, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, jobs.NotifyDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
 	if err != nil {
 		t.Fatalf("river client: %v", err)
 	}

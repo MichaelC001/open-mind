@@ -29,6 +29,7 @@ import (
 	"github.com/rohithgilla12/openmind/api/internal/jobs"
 	"github.com/rohithgilla12/openmind/api/internal/mailer"
 	appmcp "github.com/rohithgilla12/openmind/api/internal/mcp"
+	"github.com/rohithgilla12/openmind/api/internal/notify"
 	"github.com/rohithgilla12/openmind/api/internal/pdftext"
 	"github.com/rohithgilla12/openmind/api/internal/reelmedia"
 	"github.com/rohithgilla12/openmind/api/internal/store"
@@ -178,23 +179,29 @@ func run(ctx context.Context, args []string) error {
 	}
 	slog.Info("reel media", "mode", reelMode.String(), "deep_media", reelExtractor != nil)
 
+	// TODO(task 10): replace this stopgap with env-driven construction
+	// (NOTIFY_CHANNELS, Expo access token, mailer wiring). Until then the
+	// router is all-noop, so the flush job still runs and still stamps rows
+	// but delivers nothing.
+	notifyDeps := jobs.NotifyDeps{Router: notify.NewRouter(notify.NewNoop(), notify.NewNoop()), Configured: false}
+
 	switch cmd {
 	case "serve":
-		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, geocoder, reelMode, reelExtractor, false)
+		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, notifyDeps, geocoder, reelMode, reelExtractor, false)
 		if err != nil {
 			return err
 		}
 		feedSvc.River = client
 		return serveHTTP(ctx, s, client, provider, authCfg, assetStore, assetMaxBytes, feedSvc, kindleConfigFromDeps(kindleDeps), trustedProxies)
 	case "work":
-		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, geocoder, reelMode, reelExtractor, true)
+		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, notifyDeps, geocoder, reelMode, reelExtractor, true)
 		if err != nil {
 			return err
 		}
 		feedSvc.River = client
 		return work(ctx, client)
 	case "all":
-		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, geocoder, reelMode, reelExtractor, true)
+		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, notifyDeps, geocoder, reelMode, reelExtractor, true)
 		if err != nil {
 			return err
 		}
@@ -204,7 +211,7 @@ func run(ctx context.Context, args []string) error {
 		if err := checkStdioAuthMode(); err != nil {
 			return err
 		}
-		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, geocoder, reelMode, reelExtractor, false)
+		client, err := jobs.NewRiverClient(pool, pipeline, feedSvc, kindleDeps, notifyDeps, geocoder, reelMode, reelExtractor, false)
 		if err != nil {
 			return err
 		}

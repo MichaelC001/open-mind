@@ -1,0 +1,426 @@
+package jobs
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/riverqueue/river"
+
+	"github.com/rohithgilla12/openmind/api/internal/notify"
+	"github.com/rohithgilla12/openmind/api/internal/store"
+	"github.com/rohithgilla12/openmind/api/internal/store/db"
+)
+
+// notifyQueue keeps notification work off the default queue, so a burst of
+// enrichment jobs cannot delay delivery.
+const notifyQueue = "notifications"
+
+// notifyScanInterval is how often due users are looked for. One minute keeps
+// "immediate" categories feeling immediate while staying a trivially cheap
+// indexed query.
+const notifyScanInterval = time.Minute
+
+// receiptInterval is how often Expo receipts are reconciled. Expo needs a few
+// minutes before receipts are meaningful, so this is deliberately slow.
+const receiptInterval = 15 * time.Minute
+
+// pruneInterval is how often old notification rows are deleted.
+const pruneInterval = 24 * time.Hour
+
+// notifyMaxAttempts caps River retries for a flush job. It matches the
+// attempts < 3 predicate in the due-row queries so a row and its job give up
+// together.
+const notifyMaxAttempts = 3
+
+// ReceiptChecker resolves Expo ticket IDs to their terminal error codes. It is
+// an interface rather than *notify.Expo so tests can substitute a stub.
+type ReceiptChecker interface {
+	Receipts(ctx context.Context, ticketIDs []string) (map[string]string, error)
+}
+
+// NotifyDeps carries the delivery router into the workers. Configured is false
+// when NOTIFY_CHANNELS is unset; the flush still runs and still stamps rows
+// (via the noop router), which keeps the outbox from growing unbounded on an
+// install that never delivers anything. Receipts is nil when Expo is not
+// configured, in which case the receipt job is a no-op.
+type NotifyDeps struct {
+	Router     *notify.Router
+	Receipts   ReceiptChecker
+	Configured bool
+}
+
+// ScanNotificationsArgs is the periodic fan-out job. It carries no state.
+type ScanNotificationsArgs struct{}
+
+// Kind identifies the job type in River.
+func (ScanNotificationsArgs) Kind() string { return "scan_notifications" }
+
+// InsertOpts pins the job to the notifications queue.
+func (ScanNotificationsArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: notifyQueue}
+}
+
+// ScanNotificationsWorker finds users with due outbox rows and enqueues one
+// flush per user. Per-user jobs (rather than one global loop) give per-user
+// retry isolation and stop one slow Expo call head-of-line blocking everyone.
+type ScanNotificationsWorker struct {
+	river.WorkerDefaults[ScanNotificationsArgs]
+	Store *store.Store
+	River *river.Client[pgx.Tx]
+}
+
+// Work enqueues a flush per due user. A single user's enqueue failing is
+// logged and skipped rather than failing the whole scan: the next tick retries
+// them, and one bad user must not stall everyone else's notifications.
+func (w *ScanNotificationsWorker) Work(ctx context.Context, _ *river.Job[ScanNotificationsArgs]) error {
+	users, err := w.Store.Queries.ListUsersWithDueNotifications(ctx)
+	if err != nil {
+		return fmt.Errorf("listing users with due notifications: %w", err)
+	}
+	for _, uid := range users {
+		if _, err := w.River.Insert(ctx, FlushNotificationsArgs{UserID: uid}, &river.InsertOpts{
+			Queue:       notifyQueue,
+			MaxAttempts: notifyMaxAttempts,
+		}); err != nil {
+			slog.Error("scan_notifications: enqueueing flush", "user_id", uid, "err", err)
+		}
+	}
+	return nil
+}
+
+// FlushNotificationsArgs delivers one user's due notifications.
+type FlushNotificationsArgs struct {
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// Kind identifies the job type in River.
+func (FlushNotificationsArgs) Kind() string { return "flush_notifications" }
+
+// InsertOpts pins the job to the notifications queue.
+func (FlushNotificationsArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: notifyQueue}
+}
+
+// FlushNotificationsWorker applies preferences, coalescing, quiet hours, and
+// the daily cap to one user's due rows, then delivers what survives.
+type FlushNotificationsWorker struct {
+	river.WorkerDefaults[FlushNotificationsArgs]
+	Store *store.Store
+	Deps  NotifyDeps
+}
+
+// Work is the delivery pipeline for one user.
+//
+// Delivery is at-least-once. The send is an HTTP call and cannot sit inside
+// the transaction that stamps sent_at, so rows are claimed (attempts+1), sent,
+// then stamped. A crash between send and stamp can re-send once; attempts
+// reaching notifyMaxAttempts gives up with last_error set. Repeating a
+// notification is a smaller harm than losing one.
+func (w *FlushNotificationsWorker) Work(ctx context.Context, job *river.Job[FlushNotificationsArgs]) error {
+	uid := job.Args.UserID
+
+	prefs, err := w.loadPrefs(ctx, uid)
+	if err != nil {
+		return err
+	}
+
+	due, err := w.Store.Queries.ListDueNotifications(ctx, uid)
+	if err != nil {
+		return fmt.Errorf("listing due notifications: %w", err)
+	}
+	if len(due) == 0 {
+		return nil
+	}
+
+	// Quiet hours defer rather than drop: bump every due row past the window
+	// and let a later scan pick them up.
+	now := time.Now()
+	if next := notify.NextDeliverable(now, prefs); next.After(now) {
+		ids := make([]uuid.UUID, len(due))
+		for i, row := range due {
+			ids[i] = row.ID
+		}
+		if err := w.Store.Queries.DeferNotifications(ctx, db.DeferNotificationsParams{
+			UserID: uid, DeliverAfter: pgTimestamp(next), Ids: ids,
+		}); err != nil {
+			return fmt.Errorf("deferring for quiet hours: %w", err)
+		}
+		return nil
+	}
+
+	sentToday, err := w.Store.Queries.CountDeliveriesSince(ctx, db.CountDeliveriesSinceParams{
+		UserID: uid, SentAt: pgTimestamp(startOfDay(now, prefs.Location)),
+	})
+	if err != nil {
+		return fmt.Errorf("counting today's deliveries: %w", err)
+	}
+
+	target, err := w.resolveTarget(ctx, uid)
+	if err != nil {
+		return err
+	}
+
+	budget := prefs.DailyCap - int(sentToday)
+	for _, cat := range []notify.Category{notify.CategoryLifecycle, notify.CategoryDigest, notify.CategoryFeedRiver} {
+		pending := rowsFor(uid, cat, due)
+		if len(pending) == 0 {
+			continue
+		}
+		ch := prefs.For(cat)
+		if !ch.Push && !ch.Email {
+			// The user has this category switched off. Stamp the rows so they
+			// do not accumulate forever in the pending index.
+			if err := w.stamp(ctx, uid, idsOf(pending)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// lifecycle bypasses the cap: a "we gave up on your save" swallowed
+		// because feed river spent the budget is the one failure mode that
+		// makes the whole feature untrustworthy.
+		if cat != notify.CategoryLifecycle && budget <= 0 {
+			if err := w.Store.Queries.DeferNotifications(ctx, db.DeferNotificationsParams{
+				UserID: uid, DeliverAfter: pgTimestamp(startOfDay(now, prefs.Location).AddDate(0, 0, 1)), Ids: idsOf(pending),
+			}); err != nil {
+				return fmt.Errorf("deferring over-cap notifications: %w", err)
+			}
+			continue
+		}
+
+		for _, n := range notify.Coalesce(cat, pending) {
+			if err := w.deliverOne(ctx, uid, n, ch, target); err != nil {
+				return err
+			}
+			if cat != notify.CategoryLifecycle {
+				budget--
+			}
+		}
+	}
+	return nil
+}
+
+// deliverOne claims, delivers, records the ledger, and stamps one message.
+func (w *FlushNotificationsWorker) deliverOne(ctx context.Context, uid uuid.UUID, n notify.Notification, ch notify.Channels, target notify.Target) error {
+	if err := w.Store.Queries.ClaimNotifications(ctx, db.ClaimNotificationsParams{UserID: uid, Ids: n.SourceIDs}); err != nil {
+		return fmt.Errorf("claiming notifications: %w", err)
+	}
+
+	results := w.Deps.Router.Deliver(ctx, n, ch, target)
+
+	anyFailed := false
+	for _, res := range results {
+		errText := ""
+		if res.Err != nil {
+			errText = res.Err.Error()
+			anyFailed = true
+		}
+		// The ledger is per source row so the cap count and the audit trail
+		// both stay accurate for a coalesced message.
+		for _, srcID := range n.SourceIDs {
+			if err := w.Store.Queries.RecordDelivery(ctx, db.RecordDeliveryParams{
+				UserID: uid, NotificationID: srcID, Channel: res.Channel,
+				Token: res.Token, TicketID: res.TicketID, Ok: res.OK, Error: errText,
+			}); err != nil {
+				return fmt.Errorf("recording delivery: %w", err)
+			}
+		}
+	}
+
+	if anyFailed {
+		if err := w.Store.Queries.MarkNotificationsFailed(ctx, db.MarkNotificationsFailedParams{
+			UserID: uid, LastError: "one or more channels failed", Ids: n.SourceIDs,
+		}); err != nil {
+			return fmt.Errorf("marking failed: %w", err)
+		}
+	}
+	return w.stamp(ctx, uid, n.SourceIDs)
+}
+
+// stamp marks rows delivered.
+func (w *FlushNotificationsWorker) stamp(ctx context.Context, uid uuid.UUID, ids []uuid.UUID) error {
+	if err := w.Store.Queries.MarkNotificationsSent(ctx, db.MarkNotificationsSentParams{UserID: uid, Ids: ids}); err != nil {
+		return fmt.Errorf("marking notifications sent: %w", err)
+	}
+	return nil
+}
+
+// loadPrefs reads the caller's notify.* settings.
+func (w *FlushNotificationsWorker) loadPrefs(ctx context.Context, uid uuid.UUID) (notify.Prefs, error) {
+	rows, err := w.Store.Queries.ListUserSettings(ctx, uid)
+	if err != nil {
+		return notify.Prefs{}, fmt.Errorf("listing user settings: %w", err)
+	}
+	kv := make(map[string]string, len(rows))
+	for _, row := range rows {
+		kv[row.Key] = row.Value
+	}
+	return notify.ParsePrefs(kv), nil
+}
+
+// resolveTarget collects the user's live devices and e-mail address.
+func (w *FlushNotificationsWorker) resolveTarget(ctx context.Context, uid uuid.UUID) (notify.Target, error) {
+	devices, err := w.Store.Queries.ListPushDevices(ctx, uid)
+	if err != nil {
+		return notify.Target{}, fmt.Errorf("listing push devices: %w", err)
+	}
+	t := notify.Target{Devices: make([]notify.Device, len(devices))}
+	for i, d := range devices {
+		t.Devices[i] = notify.Device{Token: d.Token, Platform: d.Platform}
+	}
+	// A missing or empty account e-mail is not an error: the e-mail channel
+	// simply has no target, and push still goes.
+	if email, err := w.Store.Queries.GetUserEmail(ctx, uid); err == nil {
+		t.Email = email
+	}
+	return t, nil
+}
+
+// rowsFor selects the due rows belonging to one category and maps them onto
+// notify.Notification values.
+func rowsFor(uid uuid.UUID, cat notify.Category, due []db.ListDueNotificationsRow) []notify.Notification {
+	var out []notify.Notification
+	for _, row := range due {
+		if notify.Category(row.Category) != cat {
+			continue
+		}
+		data := map[string]any{}
+		if len(row.Data) > 0 {
+			if err := json.Unmarshal(row.Data, &data); err != nil {
+				slog.Warn("flush_notifications: unreadable data payload", "notification_id", row.ID, "err", err)
+				data = map[string]any{}
+			}
+		}
+		out = append(out, notify.Notification{
+			ID: row.ID, UserID: uid, Category: cat, DedupeKey: row.DedupeKey,
+			Title: row.Title, Body: row.Body, Data: data, SourceIDs: []uuid.UUID{row.ID},
+		})
+	}
+	return out
+}
+
+// idsOf flattens the source row IDs of a set of notifications.
+func idsOf(ns []notify.Notification) []uuid.UUID {
+	var out []uuid.UUID
+	for _, n := range ns {
+		out = append(out, n.SourceIDs...)
+	}
+	return out
+}
+
+// startOfDay returns local midnight for t in loc — the boundary the daily cap
+// counts from, so the cap resets when the user's day does, not at UTC midnight.
+func startOfDay(t time.Time, loc *time.Location) time.Time {
+	if loc == nil {
+		loc = time.UTC
+	}
+	l := t.In(loc)
+	return time.Date(l.Year(), l.Month(), l.Day(), 0, 0, 0, 0, loc)
+}
+
+// pgTimestamp wraps a time for pgx's timestamptz parameters.
+func pgTimestamp(t time.Time) pgtype.Timestamptz {
+	return pgtype.Timestamptz{Time: t, Valid: true}
+}
+
+// CheckReceiptsArgs is the periodic Expo receipt reconciliation job.
+type CheckReceiptsArgs struct{}
+
+// Kind identifies the job type in River.
+func (CheckReceiptsArgs) Kind() string { return "check_receipts" }
+
+// InsertOpts pins the job to the notifications queue.
+func (CheckReceiptsArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: notifyQueue}
+}
+
+// CheckReceiptsWorker reconciles Expo delivery receipts. Expo reports terminal
+// failures — most importantly DeviceNotRegistered — only in the receipts,
+// never in the send response, so this is the only place a dead token is
+// discovered.
+//
+// Overlapping runs re-check the same tickets, which is harmless: marking a
+// device failed twice is idempotent. That is why no "checked" column exists —
+// the bounded one-hour lookback is sufficient.
+type CheckReceiptsWorker struct {
+	river.WorkerDefaults[CheckReceiptsArgs]
+	Store *store.Store
+	Deps  NotifyDeps
+}
+
+// Work fetches receipts for recently sent tickets and retires dead devices.
+func (w *CheckReceiptsWorker) Work(ctx context.Context, _ *river.Job[CheckReceiptsArgs]) error {
+	if w.Deps.Receipts == nil {
+		return nil
+	}
+	rows, err := w.Store.Queries.ListRecentTickets(ctx)
+	if err != nil {
+		return fmt.Errorf("listing recent tickets: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	ids := make([]string, 0, len(rows))
+	tokenFor := make(map[string]string, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.TicketID)
+		tokenFor[row.TicketID] = row.Token
+	}
+
+	codes, err := w.Deps.Receipts.Receipts(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("fetching receipts: %w", err)
+	}
+	for id, code := range codes {
+		if code != "DeviceNotRegistered" {
+			continue
+		}
+		token := tokenFor[id]
+		if token == "" {
+			continue
+		}
+		if err := w.Store.Queries.MarkPushDeviceFailed(ctx, token); err != nil {
+			return fmt.Errorf("marking device failed: %w", err)
+		}
+		slog.Info("check_receipts: retired unregistered device", "ticket_id", id)
+	}
+	return nil
+}
+
+// PruneNotificationsArgs is the periodic retention job.
+type PruneNotificationsArgs struct{}
+
+// Kind identifies the job type in River.
+func (PruneNotificationsArgs) Kind() string { return "prune_notifications" }
+
+// InsertOpts pins the job to the notifications queue.
+func (PruneNotificationsArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: notifyQueue}
+}
+
+// PruneNotificationsWorker enforces retention. Without it the outbox and its
+// ledger are the fastest-growing tables in the application, and abandoned rows
+// would occupy the pending partial index indefinitely.
+type PruneNotificationsWorker struct {
+	river.WorkerDefaults[PruneNotificationsArgs]
+	Store *store.Store
+}
+
+// Work deletes aged-out and abandoned notification rows; deliveries cascade.
+func (w *PruneNotificationsWorker) Work(ctx context.Context, _ *river.Job[PruneNotificationsArgs]) error {
+	n, err := w.Store.Queries.PruneNotifications(ctx)
+	if err != nil {
+		return fmt.Errorf("pruning notifications: %w", err)
+	}
+	if n > 0 {
+		slog.Info("prune_notifications: deleted rows", "count", n)
+	}
+	return nil
+}
