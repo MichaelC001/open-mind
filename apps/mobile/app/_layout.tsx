@@ -7,8 +7,9 @@ import { JetBrainsMono_400Regular, JetBrainsMono_500Medium } from "@expo-google-
 import { Newsreader_500Medium_Italic, Newsreader_600SemiBold_Italic } from "@expo-google-fonts/newsreader";
 import { ClerkProvider } from "@clerk/clerk-expo";
 import { useFonts } from "expo-font";
+import * as Notifications from "expo-notifications";
 import { useShareIntent } from "expo-share-intent";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useRouter, type Href } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
@@ -18,9 +19,40 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { CaptureQueueProvider } from "@/lib/capture-queue-context";
 import { MorphProvider } from "@/lib/morph";
 import { clerkPublishableKey, tokenCache } from "@/lib/clerk";
+import { routeForNotificationData } from "@/lib/notifications";
 import { QueryProvider } from "@/lib/query";
 import { SettingsProvider } from "@/lib/settings-context";
 import { colors } from "@/lib/theme";
+
+// Routes a tapped push notification (cold-start or foreground/background tap)
+// to the screen its data payload identifies. Registered once at the root so
+// it applies regardless of which tab is active when the tap arrives.
+function NotificationRouterGate() {
+  const router = useRouter();
+
+  useEffect(() => {
+    // The app may have been launched by a notification tap rather than a
+    // normal open — getLastNotificationResponseAsync surfaces that response
+    // exactly once so a cold start still routes correctly.
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (!response) return;
+      const path = routeForNotificationData(response.notification.request.content.data);
+      // Cast: routeForNotificationData resolves a runtime data payload to one
+      // of a small fixed set of real routes (verified in notifications.ts),
+      // but that mapping happens outside expo-router's typed-route analysis,
+      // so the literal-union type can't be inferred here.
+      if (path) router.push(path as Href);
+    });
+
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const path = routeForNotificationData(response.notification.request.content.data);
+      if (path) router.push(path as Href);
+    });
+    return () => subscription.remove();
+  }, [router]);
+
+  return null;
+}
 
 // Held open until the brand fonts finish loading below.
 void SplashScreen.preventAutoHideAsync();
@@ -90,6 +122,7 @@ export default function RootLayout() {
         <CaptureQueueProvider>
           <StatusBar style="dark" />
           <ShareIntentGate />
+          <NotificationRouterGate />
           <Stack
             screenOptions={{
               headerShown: false,

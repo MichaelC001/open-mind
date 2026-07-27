@@ -62,6 +62,12 @@
           "photosPermission": "Allow Openmind to save photos from your library.",
           "cameraPermission": "Allow Openmind to take a photo to save."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#1B3FD1"
+        }
       ]
     ],
     "experiments": {
