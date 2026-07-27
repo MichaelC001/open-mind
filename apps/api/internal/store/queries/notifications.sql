@@ -73,12 +73,18 @@ SELECT email FROM users WHERE id = $1;
 -- succeeding. :execrows lets the caller distinguish that zero-row outcome
 -- from a real insert or same-user update.
 --
--- A device genuinely moving to a new account is already handled without a
--- transfer path: push_devices.api_key_id references api_keys(id) ON DELETE
--- CASCADE, and signing out revokes the API key, which cascades the device row
--- away. So by the time a different account registers the same token, the old
--- row is already gone and this WHERE clause never even applies — the guard is
--- invisible in normal use.
+-- The Expo push token is per-install, not per-account, so a genuine account
+-- switch on one device relies on the outgoing client unregistering its own
+-- token before it signs out — mobile does this in settings-context.tsx,
+-- ahead of clearing its stored credentials. A client that skips that step (a
+-- crash, an offline sign-out, or simply a client that hasn't implemented it)
+-- leaves the row owned by the previous account: the WHERE clause then makes
+-- the next account's registration attempt a no-op 409 instead of a silent
+-- takeover, but recovering from that state is manual (an operator deletes or
+-- reassigns the row). There is no automatic cascade to fall back on either —
+-- push_devices.api_key_id is only populated for callers authenticated with an
+-- API key, so Clerk and dev-mode callers (api_key_id NULL) are never
+-- cascaded away regardless of how sign-out happens.
 INSERT INTO push_devices (user_id, api_key_id, token, platform)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (token) DO UPDATE

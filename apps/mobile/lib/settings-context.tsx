@@ -2,6 +2,8 @@
 // sign-out helpers. Screens read `configured` to gate content and the
 // unconfigured guard uses it to redirect to Settings.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { unregisterPushDevice } from "./api";
+import { getStoredPushToken, setStoredPushToken } from "./notifications";
 import {
   clearSettings,
   getSettings,
@@ -41,9 +43,35 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [reload]);
 
   const signOut = useCallback(async () => {
+    // The Expo push token is per-install, not per-account: it isn't reissued
+    // just because a different person signs in. Leaving it registered here
+    // would both keep delivering the outgoing account's notifications to
+    // whoever uses this device next, and permanently 409 that person's own
+    // registration attempt (UpsertPushDevice's cross-tenant guard treats the
+    // token as still owned by the account that registered it, since nothing
+    // else told the server otherwise). Unregistering on sign-out is what
+    // makes that guard's account-switch story hold in practice rather than
+    // just in theory.
+    //
+    // Best-effort and ordered first: it needs the instance URL and auth token
+    // that clearSettings() is about to delete, and a failure here (offline,
+    // instance unreachable) must never block sign-out itself — someone
+    // signing out on a plane still needs to sign out.
+    try {
+      const stored = await getStoredPushToken();
+      if (stored && settings) {
+        await unregisterPushDevice(stored, settings);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+    // Clear the local record regardless of whether the server call above
+    // succeeded, so the app's own state (and the toggle's next render) is
+    // consistent either way.
+    await setStoredPushToken(null);
     await clearSettings();
     setSettings(null);
-  }, []);
+  }, [settings]);
 
   useEffect(() => {
     void reload();

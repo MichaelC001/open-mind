@@ -38,10 +38,16 @@ func (s *Server) RegisterPushDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Tying the row to the calling API key means signing out (which revokes
-	// the key) cascades the device away, rather than leaving a token pushing
-	// at a device that is no longer signed in. Clerk and dev-mode callers have
-	// no key, and simply get a null reference.
+	// Tying the row to the calling API key means that if the key is later
+	// revoked directly (currently only via the web Devices & Keys screen),
+	// the device row cascades away with it rather than being left pushing at
+	// a key that no longer exists. That is not what makes an account switch
+	// on one device safe, though: a normal sign-out never revokes the key, so
+	// the client is expected to call POST /push-devices/unregister itself
+	// before signing out (mobile does, in settings-context.tsx). Clerk and
+	// dev-mode callers have no key at all, so there is nothing to cascade for
+	// them either way — the row for those callers keeps working, or fails
+	// closed via UpsertPushDevice's cross-user guard, on its own.
 	var keyID pgtype.UUID
 	if id, ok := apiKeyID(ctx); ok {
 		keyID = pgtype.UUID{Bytes: id, Valid: true}
