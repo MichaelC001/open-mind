@@ -56,7 +56,7 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
-- Notifications (feat/notifications-spec) — at-least-once delivery (Expo, email,
+- Notifications (PR #52, merged) — at-least-once delivery (Expo, email,
   noop) via idempotent outbox (migration 0020_notifications.sql, partial unique
   index guard). `internal/notify` adapter + four River workers: scan, per-user
   flush (preferences → coalesce → quiet-hours → cap), receipt reconcile, retention.
