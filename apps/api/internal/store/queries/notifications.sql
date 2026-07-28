@@ -74,17 +74,28 @@ SELECT email FROM users WHERE id = $1;
 -- from a real insert or same-user update.
 --
 -- The Expo push token is per-install, not per-account, so a genuine account
--- switch on one device relies on the outgoing client unregistering its own
--- token before it signs out — mobile does this in settings-context.tsx,
--- ahead of clearing its stored credentials. A client that skips that step (a
--- crash, an offline sign-out, or simply a client that hasn't implemented it)
--- leaves the row owned by the previous account: the WHERE clause then makes
--- the next account's registration attempt a no-op 409 instead of a silent
--- takeover, but recovering from that state is manual (an operator deletes or
--- reassigns the row). There is no automatic cascade to fall back on either —
--- push_devices.api_key_id is only populated for callers authenticated with an
--- API key, so Clerk and dev-mode callers (api_key_id NULL) are never
--- cascaded away regardless of how sign-out happens.
+-- switch on one device relies on the outgoing client releasing its own
+-- token first — mobile does this in settings-context.tsx, both ahead of
+-- clearing its stored credentials on sign-out and ahead of overwriting them
+-- when save() detects the credentials being saved belong to a different
+-- account than what's currently stored (e.g. connecting with a new code
+-- without tapping sign-out first). There is no automatic cascade to fall
+-- back on for the mobile case: mobile always trades its Clerk session or
+-- device code for an omk_ API key, so its rows carry a non-NULL
+-- api_key_id, but a normal sign-out never revokes that key (see
+-- pushdevices.go's RegisterPushDevice comment) — so nothing cascades the row
+-- away just because the account signed out. Clerk and dev-mode callers are a
+-- separate, secondary case: push_devices.api_key_id is only populated for
+-- API-key callers, so those rows (api_key_id NULL) have no key to cascade
+-- from regardless of how sign-out happens.
+--
+-- What's still uncovered after mobile's release call: a release that fails
+-- in flight (offline, instance unreachable) or a crash between the
+-- credential change and the release running. Either leaves the row owned by
+-- the previous account, and the WHERE clause turns the next account's
+-- registration attempt into a no-op 409 instead of a silent takeover — but
+-- recovering from that state is still manual (an operator deletes or
+-- reassigns the row).
 INSERT INTO push_devices (user_id, api_key_id, token, platform)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (token) DO UPDATE

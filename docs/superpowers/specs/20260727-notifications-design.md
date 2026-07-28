@@ -292,9 +292,10 @@ notifyDailyCap:   { type: integer }
 
 Deliberately *not* `DELETE /push-devices/{token}`: an Expo token is literally
 `ExponentPushToken[xxx]`, and bracket characters in a path segment are an
-encoding trap across four generated clients for no benefit. Since signing out
-revokes the API key and cascades the device row, explicit unregister exists for
-"mute this device", not for cleanup.
+encoding trap across four generated clients for no benefit. Signing out does
+not revoke the API key or cascade the device row on its own, so explicit
+unregister is what mobile calls both to mute a device and to release its
+registration on sign-out and account switch — it is cleanup, not just muting.
 
 ## Mobile — `apps/mobile`
 

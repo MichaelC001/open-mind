@@ -90,7 +90,10 @@ test("sign-out unregisters the stored push token, in the auth-token-still-availa
 
 test("a failing unregister is logged but still lets sign-out complete", async () => {
   mockGetStoredPushToken.mockResolvedValue("expo-token-1");
-  mockUnregisterPushDevice.mockRejectedValue(new Error("network unreachable"));
+  // The real unregisterPushDevice catches its own network errors and never
+  // rejects — this is the shape production actually produces, unlike a
+  // thrown error.
+  mockUnregisterPushDevice.mockResolvedValue({ ok: false, status: 0 });
   const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
 
   const { latest } = await renderHarness();
@@ -120,4 +123,61 @@ test("no stored push token means unregister is never attempted, and sign-out sti
   expect(mockSetStoredPushToken).toHaveBeenCalledWith(null);
   expect(mockClearSettings).toHaveBeenCalledTimes(1);
   expect(latest().configured).toBe(false);
+});
+
+// save() is reachable while already signed in ("Connect with code" and
+// "Validate & save" both stay visible), so it is the other path — besides
+// signOut — through which one account's credentials can replace another's on
+// the same install. These tests cover the same release behaviour signOut has
+// above, plus the guard that skips it when the credentials aren't actually
+// changing.
+const OTHER_ACCOUNT_SETTINGS = { instanceUrl: "https://openmind.example.com", token: "omk_other" };
+
+test("save() releases the outgoing token when the credentials change to a different account", async () => {
+  mockGetStoredPushToken.mockResolvedValue("expo-token-1");
+  mockUnregisterPushDevice.mockResolvedValue({ ok: true, status: 204 });
+  mockGetSettings.mockResolvedValueOnce(STORED_SETTINGS).mockResolvedValueOnce(OTHER_ACCOUNT_SETTINGS);
+
+  const { latest } = await renderHarness();
+  await TestRenderer.act(async () => {
+    await latest().save(OTHER_ACCOUNT_SETTINGS);
+  });
+
+  // Released with the *outgoing* settings — the token belongs to the
+  // account being replaced, and the server scopes the delete by the
+  // caller's own user_id, so calling with the new credentials would no-op.
+  expect(mockUnregisterPushDevice).toHaveBeenCalledWith("expo-token-1", STORED_SETTINGS);
+  expect(mockSetStoredPushToken).toHaveBeenCalledWith(null);
+  expect(mockPersistSettings).toHaveBeenCalledWith(OTHER_ACCOUNT_SETTINGS);
+});
+
+test("save() does not release when saving unchanged credentials", async () => {
+  const { latest } = await renderHarness();
+  await TestRenderer.act(async () => {
+    await latest().save(STORED_SETTINGS);
+  });
+
+  expect(mockGetStoredPushToken).not.toHaveBeenCalled();
+  expect(mockUnregisterPushDevice).not.toHaveBeenCalled();
+  expect(mockSetStoredPushToken).not.toHaveBeenCalled();
+  expect(mockPersistSettings).toHaveBeenCalledWith(STORED_SETTINGS);
+});
+
+test("a failing release still lets save() complete", async () => {
+  mockGetStoredPushToken.mockResolvedValue("expo-token-1");
+  mockUnregisterPushDevice.mockResolvedValue({ ok: false, status: 0 });
+  mockGetSettings.mockResolvedValueOnce(STORED_SETTINGS).mockResolvedValueOnce(OTHER_ACCOUNT_SETTINGS);
+  const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+
+  const { latest } = await renderHarness();
+  await TestRenderer.act(async () => {
+    await latest().save(OTHER_ACCOUNT_SETTINGS);
+  });
+
+  expect(mockUnregisterPushDevice).toHaveBeenCalledWith("expo-token-1", STORED_SETTINGS);
+  expect(consoleError).toHaveBeenCalled();
+  expect(mockSetStoredPushToken).toHaveBeenCalledWith(null);
+  expect(mockPersistSettings).toHaveBeenCalledWith(OTHER_ACCOUNT_SETTINGS);
+
+  consoleError.mockRestore();
 });
