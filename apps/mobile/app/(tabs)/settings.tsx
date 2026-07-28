@@ -5,13 +5,15 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PressScale } from "@/components/PressScale";
-import { checkToken, claimDeviceCode } from "@/lib/api";
+import { checkToken, claimDeviceCode, registerPushDevice, unregisterPushDevice } from "@/lib/api";
+import { getStoredPushToken, registerForPushAsync, setStoredPushToken } from "@/lib/notifications";
 import { useSettingsContext } from "@/lib/settings-context";
 import { colors, fonts, radius, spacing } from "@/lib/theme";
 
@@ -30,6 +32,16 @@ type Status =
 // code produces the exact same confirmation as a successful Validate & save.
 type ClaimStatus = { kind: "idle" } | { kind: "claiming" } | { kind: "error"; message: string };
 
+// The Notifications toggle's own status line — separate from the two above
+// so a permission denial or a registration failure never bleeds into the
+// connection-status messaging they drive.
+type NotifyStatus =
+  | { kind: "idle" }
+  | { kind: "denied" }
+  | { kind: "unsupported" }
+  | { kind: "error" }
+  | { kind: "disableError" };
+
 export default function SettingsScreen() {
   const { settings, save, signOut } = useSettingsContext();
   const [instanceUrl, setInstanceUrl] = useState("");
@@ -38,6 +50,12 @@ export default function SettingsScreen() {
   const [code, setCode] = useState("");
   const [claimStatus, setClaimStatus] = useState<ClaimStatus>({ kind: "idle" });
   const [focusedField, setFocusedField] = useState<"instance" | "code" | "token" | null>(null);
+  // Off by default: this only reflects a token this device has actually
+  // registered, so a fresh install (or one that was never enabled) starts
+  // false rather than assuming anything about OS-level permission.
+  const [notifyEnabled, setNotifyEnabled] = useState(false);
+  const [notifyBusy, setNotifyBusy] = useState(false);
+  const [notifyStatus, setNotifyStatus] = useState<NotifyStatus>({ kind: "idle" });
 
   useEffect(() => {
     if (settings) {
@@ -45,6 +63,58 @@ export default function SettingsScreen() {
       setToken(settings.token);
     }
   }, [settings]);
+
+  useEffect(() => {
+    void getStoredPushToken().then((stored) => setNotifyEnabled(!!stored));
+  }, []);
+
+  async function onToggleNotifications(next: boolean) {
+    setNotifyStatus({ kind: "idle" });
+    setNotifyBusy(true);
+    try {
+      if (!next) {
+        // Turning off never fires the OS prompt — just tell the server to
+        // stop delivering to this device's token. If that call fails (offline,
+        // instance down, 500), the server still thinks this device is
+        // subscribed, so the toggle must snap back to on and say so — showing
+        // "off" here would tell the user their opt-out worked when it didn't,
+        // and they'd keep getting pushes with no idea why.
+        const stored = await getStoredPushToken();
+        if (stored) {
+          const res = await unregisterPushDevice(stored);
+          if (!res.ok) {
+            setNotifyEnabled(true);
+            setNotifyStatus({ kind: "disableError" });
+            return;
+          }
+        }
+        await setStoredPushToken(null);
+        setNotifyEnabled(false);
+        return;
+      }
+
+      // This is the one place in the app allowed to trigger the system
+      // permission prompt — it only ever runs from this explicit toggle.
+      const result = await registerForPushAsync();
+      if (!result.ok) {
+        setNotifyEnabled(false);
+        setNotifyStatus({ kind: result.reason });
+        return;
+      }
+
+      const platform = Platform.OS === "android" ? "android" : "ios";
+      const res = await registerPushDevice(result.token, platform);
+      if (!res.ok) {
+        setNotifyEnabled(false);
+        setNotifyStatus({ kind: "error" });
+        return;
+      }
+      await setStoredPushToken(result.token);
+      setNotifyEnabled(true);
+    } finally {
+      setNotifyBusy(false);
+    }
+  }
 
   async function onValidateAndSave() {
     const url = instanceUrl.trim().replace(/\/+$/, "");
@@ -222,6 +292,30 @@ export default function SettingsScreen() {
           </PressScale>
 
           {settings ? (
+            <>
+              <Text style={styles.sectionHeading}>Notifications</Text>
+              <Text style={styles.sectionHint}>
+                Lens digests, feed activity, and item processing failures. Off by default — turning
+                this on will ask for the system notification permission once.
+              </Text>
+              <View style={styles.notifyRow}>
+                <Text style={styles.notifyRowLabel}>Push notifications</Text>
+                {notifyBusy ? (
+                  <ActivityIndicator color={colors.cobalt} />
+                ) : (
+                  <Switch
+                    value={notifyEnabled}
+                    onValueChange={onToggleNotifications}
+                    trackColor={{ false: colors.hairline, true: colors.cobalt }}
+                    thumbColor={colors.cardSurface}
+                  />
+                )}
+              </View>
+              <NotifyStatusMessage status={notifyStatus} />
+            </>
+          ) : null}
+
+          {settings ? (
             <PressScale onPress={onSignOut}>
               <View style={styles.secondaryButton}>
                 <Text style={styles.secondaryButtonText}>Sign out</Text>
@@ -270,6 +364,39 @@ function ClaimStatusMessage({ status }: { status: ClaimStatus }) {
   return <Text style={[styles.status, { color: colors.danger }]}>{status.message}</Text>;
 }
 
+function NotifyStatusMessage({ status }: { status: NotifyStatus }) {
+  switch (status.kind) {
+    case "denied":
+      return (
+        <Text style={[styles.status, { color: colors.danger }]}>
+          Notifications are turned off in system Settings. Re-enable them there, then try the toggle
+          again.
+        </Text>
+      );
+    case "unsupported":
+      return (
+        <Text style={[styles.status, { color: colors.danger }]}>
+          Push notifications aren't available on this build.
+        </Text>
+      );
+    case "error":
+      return (
+        <Text style={[styles.status, { color: colors.danger }]}>
+          Couldn't enable notifications — check your connection and try again.
+        </Text>
+      );
+    case "disableError":
+      return (
+        <Text style={[styles.status, { color: colors.danger }]}>
+          Couldn't reach your instance to turn notifications off — still on. Check your connection
+          and try again.
+        </Text>
+      );
+    default:
+      return null;
+  }
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   flex: { flex: 1 },
@@ -299,6 +426,13 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
     marginBottom: spacing.lg,
   },
+  notifyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.md,
+  },
+  notifyRowLabel: { fontFamily: fonts.sans, fontSize: 15, color: colors.ink },
   field: { marginBottom: spacing.lg },
   label: {
     fontFamily: fonts.monoMedium,

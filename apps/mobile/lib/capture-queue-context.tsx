@@ -1,6 +1,7 @@
 // React surface over the durable capture queue: pending count for badges,
 // flush helper, and AppState / NetInfo / focus-driven sync.
 import NetInfo from "@react-native-community/netinfo";
+import * as Notifications from "expo-notifications";
 import {
   createContext,
   useCallback,
@@ -21,6 +22,26 @@ import {
   type QueuedCapture,
 } from "./capture-queue";
 import { drainSharedPending } from "./shared-pending";
+
+// The server sees an ordinary upload when a drained share lands — it has no
+// way to know the item arrived via the offline-drain path rather than a live
+// save — so this confirmation has to be a local notification scheduled here,
+// client-side, right after a successful drain.
+async function notifyDrained(count: number): Promise<void> {
+  if (count <= 0) return;
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Openmind",
+        body: count === 1 ? "1 saved item synced." : `${count} saved items synced.`,
+      },
+      trigger: null,
+    });
+  } catch {
+    // Best-effort confirmation only — a failure here must never affect the
+    // queue itself, which has already been drained and flushed by this point.
+  }
+}
 
 type CaptureQueueContextValue = {
   pending: QueuedCapture[];
@@ -67,7 +88,8 @@ export function CaptureQueueProvider({ children }: { children: React.ReactNode }
 
   const drainAndFlush = useCallback(async () => {
     try {
-      await drainSharedPending();
+      const drained = await drainSharedPending();
+      void notifyDrained(drained);
     } catch {
       // Draining is best-effort; a failure must never block the flush.
     }

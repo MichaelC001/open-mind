@@ -582,3 +582,50 @@ export async function mintDeviceKey(
     return { ok: false, status: 0 };
   }
 }
+
+/**
+ * Register (or refresh) an Expo push token for this device, via
+ * POST {instanceUrl}/api/push-devices. Idempotent on the token.
+ */
+export async function registerPushDevice(
+  token: string,
+  platform: "ios" | "android",
+  override?: Settings,
+): Promise<{ ok: boolean; status: number }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0 };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/push-devices`, {
+      method: "POST",
+      headers: authHeaders(settings.token, true),
+      body: JSON.stringify({ token, platform }),
+    });
+    return { ok: res.ok, status: res.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
+
+/**
+ * Stop delivering push notifications to a token, via
+ * POST {instanceUrl}/api/push-devices/unregister. A POST rather than a
+ * DELETE on the token's own path segment — an Expo token contains square
+ * brackets, which are an encoding hazard in a URL path.
+ */
+export async function unregisterPushDevice(
+  token: string,
+  override?: Settings,
+): Promise<{ ok: boolean; status: number }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0 };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/push-devices/unregister`, {
+      method: "POST",
+      headers: authHeaders(settings.token, true),
+      body: JSON.stringify({ token }),
+    });
+    return { ok: res.ok, status: res.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}

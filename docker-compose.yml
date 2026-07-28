@@ -52,6 +52,8 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       KINDLE_EMAIL: ${KINDLE_EMAIL:-}
+      NOTIFY_CHANNELS: ${NOTIFY_CHANNELS:-}
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
     volumes:
       - assetsdata:/data/assets
     ports:

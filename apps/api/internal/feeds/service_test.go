@@ -2,6 +2,7 @@ package feeds
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -38,11 +39,11 @@ func testService(t *testing.T) *Service {
 	if err := store.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE feeds, items, item_embeddings, river_job CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE feeds, items, item_embeddings, notifications, river_job CASCADE`); err != nil {
 		t.Fatalf("truncating: %v", err)
 	}
 	st := store.New(pool)
-	river, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
+	river, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, jobs.NotifyDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
 	if err != nil {
 		t.Fatalf("river client: %v", err)
 	}
@@ -140,6 +141,127 @@ func TestFeedServiceAddBackfillsAndDedups(t *testing.T) {
 	}
 	if len(feedItems) != 2 {
 		t.Errorf("feed items = %d, want 2 (backfilled items adopted onto feed)", len(feedItems))
+	}
+}
+
+// TestFeedServiceAddBackfillDoesNotNotify asserts that the pre-persist
+// backfill in Add — feedID is nil for this path — never enqueues a
+// feed_river notification, even though it creates items. Notifying the
+// instant someone subscribes (rather than only on later polls finding
+// something new) would be the single most annoying thing this feature could
+// do.
+func TestFeedServiceAddBackfillDoesNotNotify(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	uid := newUser(t, s)
+
+	var entries atomic.Pointer[[]string]
+	entries.Store(&[]string{"https://example.com/a", "https://example.com/b"})
+	srv := rssServer(t, &entries)
+	s.HTTPClient = srv.Client()
+
+	if _, added, err := s.Add(ctx, uid, srv.URL); err != nil || added != 2 {
+		t.Fatalf("add: added=%d err=%v, want 2/nil", added, err)
+	}
+
+	due, err := s.Store.Queries.ListDueNotifications(ctx, uid)
+	if err != nil {
+		t.Fatalf("list due: %v", err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("pending notifications = %d, want 0 (backfill must stay silent)", len(due))
+	}
+}
+
+// TestFeedRefreshEnqueuesFeedRiverNotification asserts that Refresh — unlike
+// Add's backfill — enqueues exactly one feed_river notification when it finds
+// new entries, keyed by feed id and the current UTC hour, carrying feed_id
+// and count in its data payload for Coalesce to sum.
+func TestFeedRefreshEnqueuesFeedRiverNotification(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	uid := newUser(t, s)
+
+	var entries atomic.Pointer[[]string]
+	entries.Store(&[]string{"https://example.com/a"})
+	srv := rssServer(t, &entries)
+	s.HTTPClient = srv.Client()
+
+	feed, _, err := s.Add(ctx, uid, srv.URL)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	// Add's backfill must not have left a pending notification behind.
+	if due, err := s.Store.Queries.ListDueNotifications(ctx, uid); err != nil || len(due) != 0 {
+		t.Fatalf("pending after add = %d err=%v, want 0/nil", len(due), err)
+	}
+
+	entries.Store(&[]string{"https://example.com/a", "https://example.com/b", "https://example.com/c"})
+	added, err := s.Refresh(ctx, feed)
+	if err != nil || added != 2 {
+		t.Fatalf("refresh: added=%d err=%v, want 2/nil", added, err)
+	}
+
+	due, err := s.Store.Queries.ListDueNotifications(ctx, uid)
+	if err != nil {
+		t.Fatalf("list due: %v", err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("pending notifications = %d, want 1", len(due))
+	}
+	if due[0].Category != "feed_river" {
+		t.Errorf("category = %q, want feed_river", due[0].Category)
+	}
+	wantKey := fmt.Sprintf("feed_river:%s:%s", feed.ID, time.Now().UTC().Format("2006-01-02T15"))
+	if due[0].DedupeKey != wantKey {
+		t.Errorf("dedupe_key = %q, want %q", due[0].DedupeKey, wantKey)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(due[0].Data, &data); err != nil {
+		t.Fatalf("decoding data: %v", err)
+	}
+	if data["feed_id"] != feed.ID.String() {
+		t.Errorf("data.feed_id = %v, want %v", data["feed_id"], feed.ID)
+	}
+	if count, ok := data["count"].(float64); !ok || int(count) != 2 {
+		t.Errorf("data.count = %v, want 2", data["count"])
+	}
+}
+
+// TestFeedRefreshDedupesFeedRiverNotificationWithinHour runs two refreshes
+// that each find one new entry within the same UTC hour: the outbox's
+// partial unique index must collapse them into a single pending row rather
+// than duplicating it, so a caller can safely retry a poll.
+func TestFeedRefreshDedupesFeedRiverNotificationWithinHour(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	uid := newUser(t, s)
+
+	var entries atomic.Pointer[[]string]
+	entries.Store(&[]string{"https://example.com/a"})
+	srv := rssServer(t, &entries)
+	s.HTTPClient = srv.Client()
+
+	feed, _, err := s.Add(ctx, uid, srv.URL)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	entries.Store(&[]string{"https://example.com/a", "https://example.com/b"})
+	if _, err := s.Refresh(ctx, feed); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	entries.Store(&[]string{"https://example.com/a", "https://example.com/b", "https://example.com/c"})
+	if _, err := s.Refresh(ctx, feed); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+
+	due, err := s.Store.Queries.ListDueNotifications(ctx, uid)
+	if err != nil {
+		t.Fatalf("list due: %v", err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("pending notifications = %d, want 1 (deduped within the hour)", len(due))
 	}
 }
 

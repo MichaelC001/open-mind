@@ -1,0 +1,153 @@
+-- name: EnqueueNotification :exec
+-- ON CONFLICT DO NOTHING is the idempotency guard: the partial unique index
+-- covers pending rows only, so a producer re-run collapses into the existing
+-- row rather than duplicating, while a fresh window still gets its own row.
+--
+-- deliver_after is deliberately omitted so the column DEFAULT now() applies.
+-- Listing it as a parameter would make sqlc generate a required field, and a
+-- caller leaving it zero would send an explicit NULL — which a DEFAULT does
+-- not rescue, because DEFAULT only fires for columns absent from the INSERT.
+-- Deferral (quiet hours, cap) happens later via DeferNotifications.
+INSERT INTO notifications (user_id, category, dedupe_key, title, body, data)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (user_id, dedupe_key) WHERE sent_at IS NULL DO NOTHING;
+
+-- name: ListUsersWithDueNotifications :many
+-- Deliberately unscoped: the flush job's whole purpose is to enumerate every
+-- user with due work, so a user_id predicate would defeat it.
+SELECT DISTINCT user_id FROM notifications
+WHERE sent_at IS NULL AND attempts < 3 AND deliver_after <= now();
+
+-- name: ListDueNotifications :many
+SELECT id, category, dedupe_key, title, body, data
+FROM notifications
+WHERE user_id = $1 AND sent_at IS NULL AND attempts < 3 AND deliver_after <= now()
+ORDER BY created_at;
+
+-- name: ClaimNotifications :exec
+UPDATE notifications SET attempts = attempts + 1
+WHERE user_id = $1 AND id = ANY(@ids::uuid[]);
+
+-- name: MarkNotificationsSent :exec
+UPDATE notifications SET sent_at = now(), last_error = ''
+WHERE user_id = $1 AND id = ANY(@ids::uuid[]);
+
+-- name: MarkNotificationsFailed :exec
+UPDATE notifications SET last_error = $2
+WHERE user_id = $1 AND id = ANY(@ids::uuid[]);
+
+-- name: DeferNotifications :exec
+UPDATE notifications SET deliver_after = $2
+WHERE user_id = $1 AND id = ANY(@ids::uuid[]);
+
+-- name: CountDeliveriesSince :one
+-- Counts distinct outbox rows, not ledger rows, so the cap is independent of
+-- how many devices or channels a message fanned out to — a two-device
+-- push+email send would otherwise burn up to four units of budget for one
+-- notification. Joins notifications to exclude category = 'lifecycle':
+-- lifecycle bypasses the cap for itself, but without this predicate its
+-- deliveries would still count against everyone else's budget (ten
+-- lifecycle notifications at 09:00 would zero out the day's digest/feed_river
+-- allowance by 09:01).
+SELECT count(DISTINCT nd.notification_id) FROM notification_deliveries nd
+JOIN notifications n ON n.id = nd.notification_id
+WHERE nd.user_id = $1 AND nd.ok AND nd.sent_at >= $2 AND n.category <> 'lifecycle';
+
+-- name: RecordDelivery :exec
+INSERT INTO notification_deliveries (user_id, notification_id, channel, token, ticket_id, ok, error)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: GetUserEmail :one
+-- The flush job needs the account e-mail to resolve the e-mail channel's
+-- target. Scoped by id, which is the caller's own user_id.
+SELECT email FROM users WHERE id = $1;
+
+-- name: UpsertPushDevice :execrows
+-- The conflict target is token alone, so without a guard any authenticated
+-- user who knew (or guessed, or had leaked to them) another user's Expo token
+-- could claim it: the update would reassign user_id, silently stealing the
+-- victim's device — the victim stops receiving their own notifications and
+-- starts receiving the attacker's instead. user_id is therefore left out of
+-- the SET list entirely (ownership never transfers on conflict), and the
+-- WHERE clause makes a cross-user conflict affect zero rows instead of
+-- succeeding. :execrows lets the caller distinguish that zero-row outcome
+-- from a real insert or same-user update.
+--
+-- The Expo push token is per-install, not per-account, so a genuine account
+-- switch on one device relies on the outgoing client releasing its own
+-- token first — mobile does this in settings-context.tsx, both ahead of
+-- clearing its stored credentials on sign-out and ahead of overwriting them
+-- when save() detects the credentials being saved belong to a different
+-- account than what's currently stored (e.g. connecting with a new code
+-- without tapping sign-out first). There is no automatic cascade to fall
+-- back on for the mobile case: mobile always trades its Clerk session or
+-- device code for an omk_ API key, so its rows carry a non-NULL
+-- api_key_id, but a normal sign-out never revokes that key (see
+-- pushdevices.go's RegisterPushDevice comment) — so nothing cascades the row
+-- away just because the account signed out. Clerk and dev-mode callers are a
+-- separate, secondary case: push_devices.api_key_id is only populated for
+-- API-key callers, so those rows (api_key_id NULL) have no key to cascade
+-- from regardless of how sign-out happens.
+--
+-- What's still uncovered after mobile's release call: a release that fails
+-- in flight (offline, instance unreachable) or a crash between the
+-- credential change and the release running. Either leaves the row owned by
+-- the previous account, and the WHERE clause turns the next account's
+-- registration attempt into a no-op 409 instead of a silent takeover — but
+-- recovering from that state is still manual (an operator deletes or
+-- reassigns the row).
+INSERT INTO push_devices (user_id, api_key_id, token, platform)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (token) DO UPDATE
+SET api_key_id = EXCLUDED.api_key_id,
+    platform = EXCLUDED.platform,
+    last_seen_at = now(),
+    failed_at = NULL
+WHERE push_devices.user_id = EXCLUDED.user_id;
+
+-- name: DeletePushDevice :execrows
+DELETE FROM push_devices WHERE user_id = $1 AND token = $2;
+
+-- name: ListPushDevices :many
+SELECT token, platform FROM push_devices
+WHERE user_id = $1 AND failed_at IS NULL;
+
+-- name: MarkPushDeviceFailed :exec
+-- Deliberately unscoped: token is UNIQUE, so it alone identifies exactly one
+-- row and a user_id predicate would be redundant.
+UPDATE push_devices SET failed_at = now() WHERE token = $1;
+
+-- name: ListRecentTickets :many
+-- The receipt job needs the token, not just the ticket, so it can retire a
+-- device Expo reports as unregistered. DISTINCT matters here: deliverOne
+-- writes one ledger row per (result x source row), so a single coalesced
+-- feed-river message covering several source rows on the same device writes
+-- several ledger rows for one ticket_id — without DISTINCT that duplication
+-- alone could push the row count past Expo's per-request cap well below any
+-- realistic push volume. LIMIT bounds the work done per run on a busy
+-- instance; the receipts job runs every 15 minutes, so a bounded backlog
+-- drains within a few cycles rather than growing unboundedly in one query.
+--
+-- Deliberately unscoped: this is global periodic maintenance across every
+-- user's outbox, not a per-user read, so a user_id predicate would defeat it
+-- the same way it would for ListUsersWithDueNotifications.
+SELECT DISTINCT ticket_id, token FROM notification_deliveries
+WHERE channel = 'expo' AND ok AND ticket_id <> '' AND token <> ''
+  AND sent_at > now() - interval '1 hour'
+LIMIT 5000;
+
+-- name: PruneNotifications :execrows
+-- Three clauses: delivered rows age out after 30 days; abandoned rows
+-- (retries exhausted, never sent) after 7; and any other still-pending row
+-- after 30 days regardless of attempts — e.g. one kept deferred because the
+-- user never registers a push device or e-mail, so it is never claimed and
+-- never exhausts attempts on its own. Without this third clause such a row
+-- would sit in the pending partial index forever.
+--
+-- Deliberately unscoped: retention is global periodic maintenance over the
+-- whole outbox, not a per-user operation, so a user_id predicate would defeat
+-- it the same way it would for ListUsersWithDueNotifications.
+DELETE FROM notifications
+WHERE (sent_at IS NOT NULL AND sent_at < now() - interval '30 days')
+   OR (sent_at IS NULL AND attempts >= 3 AND created_at < now() - interval '7 days')
+   OR (sent_at IS NULL AND created_at < now() - interval '30 days');

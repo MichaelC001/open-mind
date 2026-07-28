@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/rohithgilla12/openmind/api/internal/ai"
+	"github.com/rohithgilla12/openmind/api/internal/notify"
 	"github.com/rohithgilla12/openmind/api/internal/store"
 	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
@@ -144,6 +145,15 @@ func (w *ScanDigestsWorker) processLens(ctx context.Context, lens db.Lense, warn
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("committing digest tx: %w", err)
+	}
+
+	// A failed notification enqueue must never undo a digest that was already
+	// committed, so this sits outside the transaction and is only logged.
+	title := fmt.Sprintf("%s digest — %s", lens.Name, plural(len(ids), "new save", "new saves"))
+	if err := EnqueueNotification(ctx, w.Store, lens.UserID, notify.CategoryDigest,
+		fmt.Sprintf("digest:%s:%s", lens.ID, time.Now().UTC().Format("2006-01-02")),
+		title, "", map[string]any{"lens_id": lens.ID.String()}); err != nil {
+		slog.Error("scan_digests: enqueueing digest notification", "lens_id", lens.ID, "err", err)
 	}
 	return nil
 }

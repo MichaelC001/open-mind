@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/rohithgilla12/openmind/api/internal/enrich"
 	"github.com/rohithgilla12/openmind/api/internal/geo"
+	"github.com/rohithgilla12/openmind/api/internal/notify"
 	"github.com/rohithgilla12/openmind/api/internal/reelmedia"
 	"github.com/rohithgilla12/openmind/api/internal/store/db"
 )
@@ -44,6 +45,18 @@ type EnrichWorker struct {
 // itself succeeded, and a manual re-enrich re-offers the chance to enqueue.
 func (w *EnrichWorker) Work(ctx context.Context, job *river.Job[EnrichArgs]) error {
 	if err := w.Pipeline.Run(ctx, job.Args.UserID, job.Args.ItemID); err != nil {
+		// Only the final attempt notifies: intermediate retries are expected
+		// and invisible to the user. Successful enrichment stays silent by
+		// design — the item simply appearing in the Library is the success
+		// signal, which is the point of "capture is sacred".
+		if job.Attempt >= job.MaxAttempts {
+			if nerr := EnqueueNotification(ctx, w.Pipeline.Store, job.Args.UserID, notify.CategoryLifecycle,
+				fmt.Sprintf("lifecycle:enrich-failed:%s", job.Args.ItemID),
+				"We couldn't finish processing a save", "It's still in your Library — open it to retry.",
+				map[string]any{"item_id": job.Args.ItemID.String()}); nerr != nil {
+				slog.Error("enrich: enqueueing failure notification", "item_id", job.Args.ItemID, "err", nerr)
+			}
+		}
 		return err
 	}
 	if w.River == nil {
@@ -72,28 +85,29 @@ const digestScanInterval = time.Hour
 const pollInterval = 30 * time.Minute
 
 // NewRiverClient builds a River client over the given pool. When workersOn is
-// true it registers the enrichment, feed-poll, send-kindle, and scan-digests
-// workers, a default queue, and the periodic feed-poll and scan-digests jobs;
-// otherwise it returns an insert-only client (for the API process), which
-// enqueues jobs but runs none. feedService is only used when workersOn (the
-// poll worker + periodic job); the insert-only path ignores it and may be
-// passed nil. kindleDeps is likewise only exercised by the worker process;
-// the insert-only path still accepts it (unused) so callers don't need two
-// signatures. reelMode selects the reel-media ladder ceiling (off, thumbnail,
-// video) for the extract-places worker; reelExtractor is the optional
-// yt-dlp/ffmpeg extractor used to satisfy the video rung, and is nil when
-// deep media is unavailable (binaries not on PATH) or the ceiling doesn't
-// require it.
-func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefresher, kindleDeps KindleDeps, geocoder geo.Geocoder, reelMode reelmedia.Mode, reelExtractor *reelmedia.Extractor, workersOn bool) (*river.Client[pgx.Tx], error) {
+// true it registers the enrichment, feed-poll, send-kindle, scan-digests, and
+// notification workers, a default queue plus a dedicated notifications queue,
+// and their periodic jobs; otherwise it returns an insert-only client (for the
+// API process), which enqueues jobs but runs none. feedService is only used
+// when workersOn (the poll worker + periodic job); the insert-only path
+// ignores it and may be passed nil. kindleDeps and notifyDeps are likewise
+// only exercised by the worker process; the insert-only path still accepts
+// them (unused) so callers don't need two signatures. reelMode selects the
+// reel-media ladder ceiling (off, thumbnail, video) for the extract-places
+// worker; reelExtractor is the optional yt-dlp/ffmpeg extractor used to
+// satisfy the video rung, and is nil when deep media is unavailable (binaries
+// not on PATH) or the ceiling doesn't require it.
+func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefresher, kindleDeps KindleDeps, notifyDeps NotifyDeps, geocoder geo.Geocoder, reelMode reelmedia.Mode, reelExtractor *reelmedia.Extractor, workersOn bool) (*river.Client[pgx.Tx], error) {
 	cfg := &river.Config{}
-	// scanWorker and enrichWorker are registered before the client exists
-	// (AddWorker needs a worker instance up front), but their River fields —
-	// used to enqueue follow-up jobs — can only be set once the client is
-	// built. Since AddWorker takes a pointer and River is only read inside
-	// Work (called later, after NewRiverClient returns), setting the fields
-	// after construction is safe.
+	// scanWorker, enrichWorker, and notifyScanWorker are registered before the
+	// client exists (AddWorker needs a worker instance up front), but their
+	// River fields — used to enqueue follow-up jobs — can only be set once the
+	// client is built. Since AddWorker takes a pointer and River is only read
+	// inside Work (called later, after NewRiverClient returns), setting the
+	// fields after construction is safe.
 	var scanWorker *ScanDigestsWorker
 	var enrichWorker *EnrichWorker
+	var notifyScanWorker *ScanNotificationsWorker
 	if workersOn {
 		workers := river.NewWorkers()
 		scanWorker = &ScanDigestsWorker{Store: p.Store, Provider: p.AI, Deps: kindleDeps}
@@ -107,8 +121,16 @@ func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefr
 		river.AddWorker(workers, &PollFeedsWorker{Service: feedService})
 		river.AddWorker(workers, &SendKindleWorker{Store: p.Store, Provider: p.AI, Deps: kindleDeps})
 		river.AddWorker(workers, scanWorker)
+		notifyScanWorker = &ScanNotificationsWorker{Store: p.Store}
+		river.AddWorker(workers, notifyScanWorker)
+		river.AddWorker(workers, &FlushNotificationsWorker{Store: p.Store, Deps: notifyDeps})
+		river.AddWorker(workers, &CheckReceiptsWorker{Store: p.Store, Deps: notifyDeps})
+		river.AddWorker(workers, &PruneNotificationsWorker{Store: p.Store})
 		cfg.Workers = workers
-		cfg.Queues = map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 5}}
+		cfg.Queues = map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 5},
+			notifyQueue:        {MaxWorkers: 3},
+		}
 		cfg.PeriodicJobs = []*river.PeriodicJob{
 			river.NewPeriodicJob(
 				river.PeriodicInterval(pollInterval),
@@ -120,6 +142,21 @@ func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefr
 				func() (river.JobArgs, *river.InsertOpts) { return ScanDigestsArgs{}, nil },
 				&river.PeriodicJobOpts{RunOnStart: true},
 			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(notifyScanInterval),
+				func() (river.JobArgs, *river.InsertOpts) { return ScanNotificationsArgs{}, nil },
+				&river.PeriodicJobOpts{RunOnStart: true},
+			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(receiptInterval),
+				func() (river.JobArgs, *river.InsertOpts) { return CheckReceiptsArgs{}, nil },
+				nil,
+			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(pruneInterval),
+				func() (river.JobArgs, *river.InsertOpts) { return PruneNotificationsArgs{}, nil },
+				nil,
+			),
 		}
 	}
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)
@@ -129,6 +166,7 @@ func NewRiverClient(pool *pgxpool.Pool, p *enrich.Pipeline, feedService FeedRefr
 	if workersOn {
 		scanWorker.River = client
 		enrichWorker.River = client
+		notifyScanWorker.River = client
 	}
 	return client, nil
 }

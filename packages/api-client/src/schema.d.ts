@@ -522,6 +522,40 @@ export interface paths {
         patch: operations["patchSettings"];
         trace?: never;
     };
+    "/push-devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Register (or refresh) an Expo push token for the calling device. Idempotent on the token; re-registering clears any prior delivery failure. The row is tied to the calling API key, so signing out removes it. */
+        post: operations["registerPushDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/push-devices/unregister": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Stop delivering push notifications to a token. Deliberately a POST rather than DELETE /push-devices/{token}: an Expo token contains square brackets, which are an encoding hazard in a path segment across the generated clients. */
+        post: operations["unregisterPushDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/device-links/claim": {
         parameters: {
             query?: never;
@@ -777,10 +811,49 @@ export interface components {
              * @description Destination e-mail for Send-to-Kindle digests; absent if not configured.
              */
             kindleEmail?: string;
+            /**
+             * @description Channels for Lens digest notifications. Default push.
+             * @enum {string}
+             */
+            notifyDigest?: "off" | "push" | "email" | "both";
+            /**
+             * @description Channels for coalesced feed-river activity. Default off.
+             * @enum {string}
+             */
+            notifyFeedRiver?: "off" | "push" | "email" | "both";
+            /**
+             * @description Channels for save-failure notifications. Default push. Exempt from the daily cap.
+             * @enum {string}
+             */
+            notifyLifecycle?: "off" | "push" | "email" | "both";
+            /** @description Wall-clock range in the user's timezone, e.g. 22:00-07:00. Empty means none. */
+            notifyQuietHours?: string;
+            /** @description IANA timezone used for quiet hours and the daily-cap reset, e.g. Europe/London. */
+            notifyTimezone?: string;
+            /** @description Maximum successful deliveries per day before non-lifecycle notifications defer. Default 10. */
+            notifyDailyCap?: number;
         };
         PatchSettingsRequest: {
             /** Format: email */
             kindleEmail?: string;
+            /** @enum {string} */
+            notifyDigest?: "off" | "push" | "email" | "both";
+            /** @enum {string} */
+            notifyFeedRiver?: "off" | "push" | "email" | "both";
+            /** @enum {string} */
+            notifyLifecycle?: "off" | "push" | "email" | "both";
+            notifyQuietHours?: string;
+            notifyTimezone?: string;
+            notifyDailyCap?: number;
+        };
+        RegisterPushDeviceRequest: {
+            /** @description Expo push token, e.g. ExponentPushToken[xxx]. */
+            token: string;
+            /** @enum {string} */
+            platform: "ios" | "android";
+        };
+        UnregisterPushDeviceRequest: {
+            token: string;
         };
         /** @description Summary of a bulk import. */
         ImportResult: {
@@ -2006,6 +2079,71 @@ export interface operations {
                 };
             };
             /** @description invalid e-mail */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    registerPushDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterPushDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description registered */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description invalid token or platform */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description token is already registered to a different account */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    unregisterPushDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnregisterPushDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description unregistered */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description missing token */
             400: {
                 headers: {
                     [name: string]: unknown;

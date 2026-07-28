@@ -3,6 +3,7 @@ package jobs_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -40,14 +41,14 @@ func newDigestScanTestStore(t *testing.T) (*store.Store, *river.Client[pgx.Tx]) 
 	if err := store.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE items, item_embeddings, lenses, river_job CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE items, item_embeddings, lenses, notifications, river_job CASCADE`); err != nil {
 		t.Fatalf("truncating: %v", err)
 	}
 	s := store.New(pool)
 	if err := s.Queries.EnsureUser(ctx, digestScanTestUser); err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}
-	rc, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
+	rc, err := jobs.NewRiverClient(pool, nil, nil, jobs.KindleDeps{}, jobs.NotifyDeps{}, nil, reelmedia.ModeThumbnail, nil, false)
 	if err != nil {
 		t.Fatalf("river client: %v", err)
 	}
@@ -343,5 +344,63 @@ func TestScanDigestsProceedsWithUserKindleEmail(t *testing.T) {
 	}
 	if !updated.LastDigestAt.Valid {
 		t.Errorf("last_digest_at not stamped, want stamped after successful enqueue")
+	}
+}
+
+// TestScanDigestsEnqueuesNotification asserts that a successfully processed
+// due lens leaves exactly one pending digest notification, keyed by lens id
+// and UTC date, carrying the lens_id in its data payload — the shape both
+// Coalesce (pass-through for digest) and the mobile deep link depend on.
+func TestScanDigestsEnqueuesNotification(t *testing.T) {
+	s, rc := newDigestScanTestStore(t)
+	ctx := context.Background()
+
+	newDigestScanItem(t, s, "one", "content")
+	lens := createDigestLens(t, s, "Design", "daily")
+
+	runDigestScan(t, s, rc)
+
+	due, err := s.Queries.ListDueNotifications(ctx, digestScanTestUser)
+	if err != nil {
+		t.Fatalf("list due: %v", err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("pending notifications = %d, want 1", len(due))
+	}
+	wantKey := fmt.Sprintf("digest:%s:%s", lens.ID, time.Now().UTC().Format("2006-01-02"))
+	if due[0].DedupeKey != wantKey {
+		t.Errorf("dedupe_key = %q, want %q", due[0].DedupeKey, wantKey)
+	}
+	if due[0].Category != "digest" {
+		t.Errorf("category = %q, want digest", due[0].Category)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(due[0].Data, &data); err != nil {
+		t.Fatalf("decoding data: %v", err)
+	}
+	if data["lens_id"] != lens.ID.String() {
+		t.Errorf("data.lens_id = %v, want %v", data["lens_id"], lens.ID)
+	}
+}
+
+// TestScanDigestsSkipsWhenTransportUnconfiguredDoesNotNotify asserts that a
+// lens skipped for an unconfigured transport (no digest was ever sent) also
+// produces no notification — otherwise a user would be told about a digest
+// that never went out.
+func TestScanDigestsSkipsWhenTransportUnconfiguredDoesNotNotify(t *testing.T) {
+	s, rc := newDigestScanTestStore(t)
+	ctx := context.Background()
+
+	newDigestScanItem(t, s, "one", "content")
+	createDigestLens(t, s, "Notes", "daily")
+
+	runDigestScanWithDeps(t, s, rc, jobs.KindleDeps{Configured: false})
+
+	due, err := s.Queries.ListDueNotifications(ctx, digestScanTestUser)
+	if err != nil {
+		t.Fatalf("list due: %v", err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("pending notifications = %d, want 0 (no digest was sent)", len(due))
 	}
 }
