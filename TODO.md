@@ -25,10 +25,15 @@
   listing copy and permission justifications in
   `docs/20260731-chrome-web-store-listing.md`.
 
+## Decided — don't re-raise
+- **Mobile and dock keep hard-defaulting to the hosted instance**
+  (`apps/mobile/lib/clerk.ts`, `apps/dock/src/lib/settings.ts`). The extension
+  was changed to blank + opt-in because a public store distributes it to
+  strangers; mobile and dock deliberately keep the convenience default. This is
+  a considered maintainer decision as of 2026-07-31, not an oversight — leave it
+  alone unless the maintainer reopens it.
+
 ## Next
-- Apply the same opt-in-instance treatment to mobile (`apps/mobile/lib/clerk.ts`)
-  and dock (`apps/dock/src/lib/settings.ts`) before any App Store / release
-  build — both still hard-default to the maintainer's hosted instance.
 - **Extension UI falls back to system fonts.** `packages/ui` tokens reference
   `var(--font-instrument-sans)` etc., which only the web app defines via
   `next/font`; the extension defines nothing, so the popup and options page
