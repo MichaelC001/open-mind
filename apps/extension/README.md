@@ -92,7 +92,15 @@ origin you configure, at the moment you configure it:
   straight through to the Go API. Recent-saves needs an up-to-date web app —
   the `GET /api/items` proxy handler was added alongside this popup, so
   self-hosters must redeploy the web app to see the recent list populate.
-- Icons under `public/icon/` are placeholder solid-cobalt (`#2438FF`) squares —
-  replace them before any store submission.
+- Icons under `public/icon/` are the Openmind mark (a cobalt card with three
+  fading text lines), matching the web app's sidebar wordmark. `16.png` is drawn
+  separately at integer coordinates rather than scaled down, so it stays crisp
+  in the toolbar; vector sources live in `docs/store/`.
+- Brand fonts are **bundled**, not fetched. `lib/fonts.css` self-hosts Instrument
+  Sans and JetBrains Mono via `@fontsource-variable/*` (weight axis only, one
+  file per family) and maps them onto the `--font-*` custom properties that
+  `packages/ui` tokens expect — the web app defines those via `next/font`, which
+  the extension has no equivalent for. Never switch this to a Google Fonts URL:
+  remote font/CSS requests in an extension are a review risk and break offline.
 - `pnpm --filter extension zip` (and `zip:firefox`) produce the store upload
   archives in `.output/`.

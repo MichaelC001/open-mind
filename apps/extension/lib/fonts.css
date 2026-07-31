@@ -1,0 +1,33 @@
+/* Brand fonts for the extension's own pages (popup + options).
+ *
+ * `packages/ui` tokens resolve to `var(--font-instrument-sans), 'Instrument
+ * Sans', system-ui, …`. The web app defines those custom properties via
+ * next/font; the extension has no equivalent, so before this file the variables
+ * resolved to nothing and every surface fell through to system-ui — visibly
+ * off-brand on a store listing.
+ *
+ * Self-hosted deliberately: an extension must never fetch CSS or fonts from
+ * Google at runtime. That's a review risk, leaks a request per install to a
+ * third party, and breaks when offline. These are bundled into the package.
+ *
+ * `wght.css` is the upright weight-axis-only subset of each variable font — one
+ * file per family covering 400–700, rather than a static file per weight. No
+ * italic or width axes are shipped because no extension surface uses them.
+ */
+@import "@fontsource-variable/instrument-sans/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+
+:root {
+  --font-instrument-sans: "Instrument Sans Variable";
+  --font-jetbrains-mono: "JetBrains Mono Variable";
+}
+
+/* The popup and options pages render into a bare document, so give the body the
+ * same baseline the web app's layout sets. Individual components still set their
+ * own families via the tokens; this only stops a flash of Times on first paint.
+ */
+body {
+  margin: 0;
+  font-family: var(--font-instrument-sans), "Instrument Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

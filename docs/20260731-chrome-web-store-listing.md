@@ -160,20 +160,21 @@ library.
       one flow no automated run has exercised.
 - [ ] Confirm the install-time permission warning mentions no host access
 - [ ] Register the developer account (one-time US$5) and complete verification
-- [ ] Decide on the extension UI font gap (below) before or after first submit
 - [ ] Optional promo tiles: 440×280 small, 1400×560 marquee
 
-## Known cosmetic gap
+## Brand fonts (resolved)
 
-The popup and options page render in the **system font**, not the brand faces.
-`packages/ui` tokens reference `var(--font-instrument-sans)` etc., which the web
-app defines via `next/font`; the extension has no equivalent, so the variables
-resolve to nothing and the stack falls through to `system-ui`. Visible in
-`extension-options.png`.
+The popup and options page used to render in `system-ui`: `packages/ui` tokens
+reference `var(--font-instrument-sans)` etc., which only the web app defines via
+`next/font`, so in the extension the variables resolved to nothing.
 
-Not a submission blocker — plenty of extensions use system fonts, and a small
-popup arguably reads better that way. To fix, self-host the faces in the
-extension (e.g. `@fontsource/instrument-sans` + `@fontsource/jetbrains-mono`
-plus an `@font-face` block in the popup/options entrypoints). Do not load them
-from Google Fonts at runtime: remote CSS/font fetches in an extension are a
-review risk and break the offline case.
+Now fixed — `apps/extension/lib/fonts.css` bundles Instrument Sans and JetBrains
+Mono as **self-hosted variable fonts** (`@fontsource-variable/*`, weight axis
+only) and maps them onto those custom properties. Both entrypoints import it.
+Verified with `document.fonts` that the faces load and that headings actually
+resolve to `Instrument Sans Variable` rather than merely declaring it.
+
+Fonts are bundled, never fetched from Google at runtime: a remote CSS/font
+request in an extension is a review risk, leaks a request per install to a third
+party, and breaks offline. The package is ~350 kB total as a result, which is
+still small for the store.

@@ -34,12 +34,6 @@
   alone unless the maintainer reopens it.
 
 ## Next
-- **Extension UI falls back to system fonts.** `packages/ui` tokens reference
-  `var(--font-instrument-sans)` etc., which only the web app defines via
-  `next/font`; the extension defines nothing, so the popup and options page
-  render off-brand. Fix by self-hosting the faces in the extension (fontsource
-  + `@font-face`), never by fetching Google Fonts at runtime. Cosmetic, not a
-  store blocker — see the store listing doc.
 - (see Issues)
 
 ## Later
