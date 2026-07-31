@@ -13,14 +13,16 @@
   username, and a personal e-mail in the old `/privacy` + `/terms` pages. Chase
   the GitHub Support ticket filed 2026-07-15; no credential rotation needed.
   Details in `.superpowers/launch-checklist.md` (local-only).
-- Chrome Web Store submission — code, icons, and screenshots all done (blank
-  default instance + opt-in hosted, optional per-origin host permissions,
-  manifest description, v1.0.0, real icons, six 1280×800 store screenshots).
-  **Two things left, both needing you:** set `CONTACT_EMAIL` in production so
-  the `/privacy` policy URL resolves with a working address, and register the
-  developer account (US$5). Also walk the first-run permission prompt by hand —
-  the capture harness bypasses it, so no automated run has exercised that flow.
-  Listing copy, permission justifications, and asset inventory in
+- Chrome Web Store submission — **parked by choice; everything in code is
+  done** (PR #54, merged + deployed 2026-07-31). Blank default instance,
+  optional per-origin host permissions, manifest description, v1.0.0, real
+  icons, six 1280×800 store screenshots. `CONTACT_EMAIL` is now set in
+  production and `/privacy` + `/terms` serve a working mailto.
+  **Remaining, all human-only:** register the developer account (US$5), and
+  walk the first-run permission prompt by hand — the capture harness bypasses
+  it, so no automated run has exercised that flow. Step-by-step playbook lives
+  in Notion ("Openmind — Chrome Web Store submission & update playbook");
+  listing copy and permission justifications in
   `docs/20260731-chrome-web-store-listing.md`.
 
 ## Next
