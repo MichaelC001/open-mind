@@ -16,8 +16,9 @@
 - Chrome Web Store submission — **parked by choice; everything in code is
   done** (PR #54, merged + deployed 2026-07-31). Blank default instance,
   optional per-origin host permissions, manifest description, v1.0.0, real
-  icons, six 1280×800 store screenshots. `CONTACT_EMAIL` is now set in
-  production and `/privacy` + `/terms` serve a working mailto.
+  icons, six 1280×800 store screenshots, and brand fonts bundled rather than
+  falling back to system-ui. `CONTACT_EMAIL` is now set in production and
+  `/privacy` + `/terms` serve a working mailto.
   **Remaining, all human-only:** register the developer account (US$5), and
   walk the first-run permission prompt by hand — the capture harness bypasses
   it, so no automated run has exercised that flow. Step-by-step playbook lives
