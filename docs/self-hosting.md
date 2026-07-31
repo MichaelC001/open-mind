@@ -304,6 +304,7 @@ Tools exposed:
 - `search_items` — hybrid full-text + semantic search (optional colour, natural-language parsing)
 - `list_recent` — the most recently saved items
 - `get_item` — full detail of one item, including the archived body
+- `related_items` — items semantically nearest a given one (pgvector neighbours)
 - `set_user_tags` — replace your own tags on an item (AI tags are separate and untouched)
 - `pin_item` — pin an item to the Desk, or unpin it
 - `delete_item` — permanently delete an item; refuses without `confirm:true`, so an agent must check with you first

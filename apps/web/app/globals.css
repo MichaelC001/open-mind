@@ -90,6 +90,46 @@ body{-webkit-font-smoothing:antialiased}
 /* Faint horizontal-rule paper texture; overlay behind card content. */
 .paper-texture{background:repeating-linear-gradient(#00000000 0 31px,rgba(28,26,22,.028) 31px 32px)}
 
+/* Feed river — subscription filter chips scroll horizontally so a long
+   subscription list doesn't crowd the page into a three-row chip stack. */
+.feed-chips{
+  display:flex;
+  gap:8px;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  padding:2px 2px 10px;
+  margin:0 -2px;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(28,26,22,.2) transparent;
+  -webkit-overflow-scrolling:touch;
+}
+.feed-chips::-webkit-scrollbar{height:6px}
+.feed-chips::-webkit-scrollbar-thumb{background:rgba(28,26,22,.18);border-radius:999px}
+.feed-chips .chip{flex:none;white-space:nowrap}
+
+/* Feed river rows — same soft paper card as The Mind, with quieter hover
+   lift so the reverse-chron list can breathe without feeling like a grid. */
+.feed-row{
+  display:flex;
+  align-items:flex-start;
+  gap:20px;
+  padding:22px 24px;
+  background:#FCFBF6;
+  border:1px solid rgba(28,26,22,.11);
+  border-radius:11px;
+  box-shadow:0 1px 2px rgba(28,26,22,.05),0 10px 26px -20px rgba(28,26,22,.45);
+  transition:transform .18s ease,box-shadow .18s ease;
+}
+.feed-row:hover{
+  transform:translateY(-2px);
+  box-shadow:0 2px 4px rgba(28,26,22,.06),0 20px 44px -20px rgba(28,26,22,.55);
+}
+.feed-row-title:hover{color:#1B3FD1}
+@media (prefers-reduced-motion:reduce){
+  .feed-row{transition:none}
+  .feed-row:hover{transform:none}
+}
+
 @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
 
 /* The floating Drift card, plus its entrance on each Keep/Let-go swap. The
@@ -204,3 +244,29 @@ body{-webkit-font-smoothing:antialiased}
 .lp-panel{background:#FCFBF6;border:1px solid rgba(28,26,22,.11);border-radius:11px;padding:22px}
 
 .lp-pre{background:#1C1A16;color:#F4F0E6;border-radius:11px;padding:20px 22px;overflow-x:auto;font:400 13px/1.7 var(--font-jetbrains-mono),'JetBrains Mono',monospace}
+
+/* Landing page, continued — grids and chips for the expanded feature sections. */
+.lp-grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+
+@media (max-width:760px){.lp-grid2{grid-template-columns:1fr}}
+
+.lp-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+
+@media (max-width:980px){.lp-grid4{grid-template-columns:repeat(2,1fr)}}
+
+@media (max-width:520px){.lp-grid4{grid-template-columns:1fr}}
+
+/* Section rule + label, to break the page into acts rather than one long scroll. */
+.lp-act{border-top:1px solid rgba(28,26,22,.11);margin-top:56px;padding-top:26px}
+
+.lp-chips{display:flex;flex-wrap:wrap;gap:7px;margin:0;padding:0;list-style:none}
+
+.lp-chips li{font:500 10.5px/1 var(--font-jetbrains-mono),'JetBrains Mono',monospace;letter-spacing:.02em;color:#1C1A16;background:#FCFBF6;border:1px solid rgba(28,26,22,.13);padding:7px 10px;border-radius:20px}
+
+/* Grid children default to min-width:auto, so a wide <pre> refuses to shrink
+   below its content and pushes its track past the viewport — 21px of sideways
+   scroll on a 390px screen before this. min-width:0 lets the track shrink and
+   hands the overflow to .lp-pre's own overflow-x:auto, where it belongs. */
+.lp-grid2>*,.lp-grid3>*,.lp-grid4>*,.lp-feature>*{min-width:0}
+
+.lp-pre{max-width:100%}
