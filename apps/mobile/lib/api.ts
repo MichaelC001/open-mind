@@ -522,6 +522,34 @@ export async function getItemPlaces(
 }
 
 /**
+ * Drop one extracted place via DELETE {instanceUrl}/api/items/{id}/places/{placeId}.
+ *
+ * Only 204 counts as success. A 404 is deliberately NOT folded in: this app
+ * ships through the stores while instances are self-hosted, so it routinely
+ * runs ahead of the server, and an instance without this endpoint 404s the
+ * whole unregistered route. Treating that as success would make removals look
+ * like they worked and then silently reappear. `status: 0` means the request
+ * never went out — no instance configured, or the fetch threw.
+ */
+export async function deleteItemPlace(
+  id: string,
+  placeId: string,
+  override?: Settings,
+): Promise<{ ok: boolean; status: number }> {
+  const settings = await resolveSettings(override);
+  if (!settings) return { ok: false, status: 0 };
+  try {
+    const res = await fetch(`${settings.instanceUrl}/api/items/${id}/places/${placeId}`, {
+      method: "DELETE",
+      headers: authHeaders(settings.token),
+    });
+    return { ok: res.status === 204, status: res.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
+
+/**
  * All of the user's places via GET {instanceUrl}/api/places.
  */
 export async function listPlaces(
