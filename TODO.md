@@ -92,6 +92,13 @@
 - Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
 
 ## Done (recent)
+- **Deployed to prod 2026-08-01** — PRs #56 (Feed spacing + summary markdown),
+  #57 (Raindrop token import), #59 (place removal). Box had been on #54 since
+  2026-07-31. Sequential api→web build (load peaked 5.5, well under the <8
+  rule), `docker restart cloudflared`, pruned first (77%→82% after, 8.0G free).
+  No new env vars needed. Verified by grepping the running api binary for both
+  new route strings with a negative control — note the box 401s *before*
+  routing, so a 401 on an unknown path proves nothing about deployment
 - Remove an extracted place — `DELETE /items/{id}/places/{placeId}` (204; 404
   for an unknown/cross-tenant item, an unknown place, or a place on a different
   item) so a hallucinated venue or a brand name read off a reel can be dropped.
