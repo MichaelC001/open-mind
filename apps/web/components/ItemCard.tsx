@@ -1,7 +1,7 @@
 import { tokens } from "@openmind/ui";
 import type { CSSProperties, ReactNode } from "react";
 import { assetSrc } from "../lib/assets";
-import { cardKind, domainOf, typeAccent, typeGradient, typeLabel } from "../lib/cards";
+import { cardKind, domainOf, fallbackTitle, typeAccent, typeGradient, typeLabel } from "../lib/cards";
 import { derivedPalette } from "../lib/palette";
 import { unionTags } from "../lib/tags";
 import { renderInlineMarkdown } from "../lib/text";
@@ -31,6 +31,27 @@ function Enriching() {
       }}
     >
       enriching…
+    </p>
+  );
+}
+
+/**
+ * Extraction failed — usually the site refused our fetch (bot protection such as
+ * DataDome 403s every non-browser client). Say so plainly, so an unenriched card
+ * reads as one blocked page rather than a broken app.
+ */
+function Unfetched() {
+  return (
+    <p
+      style={{
+        fontFamily: font.mono,
+        fontSize: "0.72rem",
+        letterSpacing: ".02em",
+        color: color.terracotta,
+        margin: "10px 0 0",
+      }}
+    >
+      couldn’t fetch — site blocked us
     </p>
   );
 }
@@ -185,7 +206,11 @@ const specStyle: CSSProperties = {
 export function ItemCard({ item }: { item: Item }) {
   const kind = cardKind(item.cardType);
   const pending = item.status === "pending";
+  const failed = item.status === "failed";
   const domain = domainOf(item.url);
+  // A failed extraction never ran classification, so these items stay `article`
+  // and land in the default branch below with nothing but a domain to show.
+  const displayTitle = item.title ?? (failed ? fallbackTitle(item.url) : null);
   const img = assetSrc(item.leadImageUrl);
   // Real extracted palette when present; otherwise a deterministic placeholder
   // derived from the title + tags (see lib/palette).
@@ -430,11 +455,12 @@ export function ItemCard({ item }: { item: Item }) {
         <TopAccent color={accent} />
       )}
       <div style={{ padding: "13px 14px" }}>
-        {item.title ? <h2 style={{ ...serifTitle(17), lineHeight: 1.2 }}>{item.title}</h2> : null}
+        {displayTitle ? <h2 style={{ ...serifTitle(17), lineHeight: 1.2 }}>{displayTitle}</h2> : null}
         {item.summary ? <p style={summaryStyle}>{renderInlineMarkdown(item.summary)}</p> : null}
         <Tags tags={unionTags(item.tags, item.userTags)} />
         <Footer dots={dots} meta={withDomain(typeLabel[kind])} viaFeed={!!item.feedId} />
         {pending ? <Enriching /> : null}
+        {failed ? <Unfetched /> : null}
       </div>
     </article>
   );

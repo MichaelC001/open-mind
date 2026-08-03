@@ -59,6 +59,30 @@ export function domainOf(url: string | undefined): string | null {
   }
 }
 
+/**
+ * A failed extraction leaves an item with no title, summary or tags, so its card
+ * would otherwise render as an empty shell and read as a broken app. Recover the
+ * most human part of the url — the last path segment, else the hostname — so the
+ * card still says what was saved.
+ */
+export function fallbackTitle(url: string | undefined): string | null {
+  const host = domainOf(url);
+  if (!host || !url) return null;
+  let path: string;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  const segment = path.split("/").filter(Boolean).pop();
+  if (!segment) return host;
+  const words = decodeURIComponent(segment)
+    .replace(/\.[a-z0-9]{1,5}$/i, "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+  return words || null;
+}
+
 const { color } = tokens;
 
 /**
