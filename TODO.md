@@ -105,6 +105,15 @@
   the repo card type.
 
 ## Done (recent)
+- **Deployed to prod 2026-08-03** — PR #64 (Feed header/filter spacing).
+  Web-only change, so `docker compose up -d --build web` alone (no api rebuild,
+  no migration) + `docker restart cloudflared`. Load 0.09 before building;
+  `docker builder prune -f` first took / from 78%→76%, back to 78% after.
+  Verified by pulling the served `/_next/static/css` chunk and grepping it:
+  `.feed-strip`/`.feed-strip-more`/`.chip:focus-visible` present, `var(--gutter)`
+  and the old `.feed-chips` gone. `/login` + `/` 200, `/feed` 307 to the Clerk
+  gate as expected. Procedure now lives in the personal `deploy-openmind` skill
+  (host details stay out of this public repo)
 - Feed page header/filter spacing — `/feed` reached for a `var(--gutter)` that
   is defined nowhere, so both `padding` shorthands were invalid at computed-value
   time and the header *and* the river rendered with zero padding. Now on the
