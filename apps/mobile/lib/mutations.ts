@@ -3,9 +3,8 @@ import { useCallback } from "react";
 import { Alert } from "react-native";
 import { deleteItem, setKept, setPinned, type Item } from "./api";
 import { confirmDelete } from "./item-actions";
+import { filterCachedItems, mapCachedItems } from "./paged-cache";
 import { queryKeys } from "./query";
-
-type LibraryData = { items: Item[]; understood?: unknown };
 
 /** Patch an item across every list cache that might hold it. */
 function patchItemInCaches(
@@ -13,24 +12,19 @@ function patchItemInCaches(
   id: string,
   patch: Partial<Item>,
 ) {
-  const apply = (items: Item[] | undefined) =>
-    items?.map((it) => (it.id === id ? { ...it, ...patch } : it));
+  const apply = (it: Item): Item => (it.id === id ? { ...it, ...patch } : it);
 
-  qc.setQueriesData<Item[]>({ queryKey: ["feed"] }, apply);
+  qc.setQueriesData({ queryKey: ["feed"] }, (prev) => mapCachedItems<Item>(prev, apply));
+  qc.setQueriesData({ queryKey: ["items"] }, (prev) => mapCachedItems<Item>(prev, apply));
+  qc.setQueriesData({ queryKey: ["search"] }, (prev) => mapCachedItems<Item>(prev, apply));
   qc.setQueriesData<Item[]>({ queryKey: queryKeys.desk() }, (prev) => {
     if (!prev) return prev;
     // Unpinning removes from desk immediately.
     if (patch.pinnedAt === null) return prev.filter((it) => it.id !== id);
     // Pinning: if the item isn't on desk yet, leave lists to invalidate
     // (we may not have the full item here). Just patch badge fields if present.
-    return apply(prev) ?? prev;
+    return prev.map(apply);
   });
-  qc.setQueriesData<LibraryData>({ queryKey: ["items"] }, (prev) =>
-    prev ? { ...prev, items: apply(prev.items) ?? prev.items } : prev,
-  );
-  qc.setQueriesData<LibraryData>({ queryKey: ["search"] }, (prev) =>
-    prev ? { ...prev, items: apply(prev.items) ?? prev.items } : prev,
-  );
   qc.setQueryData(queryKeys.item(id), (prev: Item | undefined) =>
     prev ? { ...prev, ...patch } : prev,
   );
@@ -40,9 +34,24 @@ function patchItemInCaches(
 export function useInvalidateLists() {
   const qc = useQueryClient();
   return useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["items"] });
+    // ["items"] and ["feed"] are infinite queries: invalidating them normally
+    // would refetch every loaded page in sequence (v5 dropped refetchPage), and
+    // we used to dodge that by trimming the cache to one page before
+    // invalidating. That trim was wrong here — it runs on every pin/keep/delete,
+    // so a reader scrolled to item 120 would see their list collapse back to
+    // page one the moment the mutation resolved. Instead, mark them stale with
+    // refetchType: "none": no refetch fires now, so nothing collapses.
+    // patchItemInCaches/filterCachedItems above already keep the visible items
+    // correct optimistically; the one gap they can't cover — e.g. a keep making
+    // an item newly eligible for a list that doesn't have it yet — reconciles
+    // next time that tab regains focus, via useSoftFocusRefetch, which already
+    // passes trimToFirstPage as its onBeforeRefetch so that eventual refetch is
+    // still a single request. Do not restore the trim here.
+    void qc.invalidateQueries({ queryKey: ["items"], refetchType: "none" });
+    void qc.invalidateQueries({ queryKey: ["feed"], refetchType: "none" });
+    // search and desk are single-page caches, so the fan-out problem never
+    // applied to them; refetch immediately as before.
     void qc.invalidateQueries({ queryKey: ["search"] });
-    void qc.invalidateQueries({ queryKey: ["feed"] });
     void qc.invalidateQueries({ queryKey: queryKeys.desk() });
   }, [qc]);
 }
@@ -122,18 +131,13 @@ export function useDeleteItem() {
         }
         void qc.removeQueries({ queryKey: queryKeys.item(item.id) });
         // Drop from list caches immediately so back-nav doesn't flash the gone card.
-        qc.setQueriesData<Item[]>({ queryKey: ["feed"] }, (prev) =>
-          prev?.filter((it) => it.id !== item.id),
-        );
-        qc.setQueriesData<Item[]>({ queryKey: queryKeys.desk() }, (prev) =>
-          prev?.filter((it) => it.id !== item.id),
-        );
-        qc.setQueriesData<LibraryData>({ queryKey: ["items"] }, (prev) =>
-          prev ? { ...prev, items: prev.items.filter((it) => it.id !== item.id) } : prev,
-        );
-        qc.setQueriesData<LibraryData>({ queryKey: ["search"] }, (prev) =>
-          prev ? { ...prev, items: prev.items.filter((it) => it.id !== item.id) } : prev,
-        );
+        const keep = (it: Item) => it.id !== item.id;
+        qc.setQueriesData({ queryKey: ["feed"] }, (prev) => filterCachedItems<Item>(prev, keep));
+        qc.setQueriesData({ queryKey: ["items"] }, (prev) => filterCachedItems<Item>(prev, keep));
+        qc.setQueriesData({ queryKey: ["search"] }, (prev) => filterCachedItems<Item>(prev, keep));
+        // Desk stays a flat Item[] (it isn't paginated), so a plain filter is
+        // simplest and matches the other Desk-specific branches in this file.
+        qc.setQueriesData<Item[]>({ queryKey: queryKeys.desk() }, (prev) => prev?.filter(keep));
         invalidate();
         after?.();
       });

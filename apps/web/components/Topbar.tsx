@@ -10,8 +10,18 @@ const { color, font } = tokens;
  * and an Export JSON link. Server component — the only interactive piece is the
  * client SearchBox; the Save button is an in-page anchor (no client needed).
  */
-export function Topbar({ count, q }: { count: number; q?: string }) {
-  const noun = count === 1 ? "gathering" : "gatherings";
+export function Topbar({
+  count,
+  q,
+  hasMore,
+}: {
+  count: number;
+  q?: string;
+  hasMore?: boolean;
+}) {
+  // A "+" total is always more than one, so force the plural even when only
+  // one item has loaded so far (matches apps/mobile/app/(tabs)/index.tsx).
+  const noun = hasMore || count !== 1 ? "gatherings" : "gathering";
 
   return (
     <>
@@ -54,7 +64,8 @@ export function Topbar({ count, q }: { count: number; q?: string }) {
               color: color.inkFaintAlt,
             }}
           >
-            {count.toLocaleString("en-GB")} {noun} · organised by the machine
+            {count.toLocaleString("en-GB")}
+            {hasMore ? "+" : ""} {noun} · organised by the machine
           </div>
         </div>
 
