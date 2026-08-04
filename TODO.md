@@ -114,6 +114,28 @@
   seam) only if the per-page seam proves annoying against a real 50-card page.
 
 ## Done (recent)
+- **Deployed to prod 2026-08-04** — PR #66 (cursor pagination + infinite scroll),
+  squash-merged as `1c1af2f`. Touched both api and web, so sequential
+  `--build api` then `--build web` + `docker restart cloudflared`. Pruned first
+  (79%→76%, 82% after). Load peaked 5.29 on the api build, 3.21 on web — both
+  under the <8 rule. Image IDs prove both rebuilds took: api `2764dc`→`23d4d78`,
+  web `cf14c3`→`4df5c92`. **Migration 0022 confirmed applied** — recorded in
+  `schema_migrations`, and `pg_indexes` shows the swap completed exactly
+  (`items_user_created_id_idx` present, `items_user_created_idx` dropped).
+  Verified with passing positive *and* negative controls: web bundle carries
+  "Load more saves", "Couldn't load more", and the new aria-live announcement;
+  api binary carries "invalid cursor" and `created_at DESC, id DESC` ×3.
+  `ListItemsAll` correctly still shows the old un-tiebroken ORDER BY ×1.
+  `/login` `/` `/architecture` 200; `/feed` `/desk` 307 to the Clerk gate.
+  No errors in the api log since boot.
+  **NOT verified — needs a signed-in human:** that saving via QuickAdd/ImageDrop
+  on `/` makes the new card appear. That was a Critical the whole-branch review
+  caught (`router.refresh()` preserves client state, so `ItemRiver` discarded the
+  fresh page 1); the fix is deployed but unobserved, because the Mind sits behind
+  Clerk and no automated session can reach it. Also unverified: whether the
+  IntersectionObserver auto-loads without a click, and the mobile tabs (no dev
+  build exists — mobile also hard-defaults to this instance, so it will exercise
+  the envelope for real once rebuilt)
 - Infinite scrolling on web and mobile — `/items` and `/feed` now return an
   `ItemPage` envelope (`{items, nextCursor}`) with keyset pagination on
   `(created_at DESC, id DESC)`; migration 0022 adds the matching index and drops
