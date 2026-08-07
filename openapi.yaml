@@ -244,7 +244,14 @@ paths:
   /assets:
     post:
       operationId: createAsset
-      description: "Upload a local image as a first-class image card (multipart field 'file')."
+      description: >
+        Upload a local file as a first-class card (multipart field 'file').
+        Images become image cards; PDFs and office documents (.docx, .odt,
+        .rtf, .epub) become article cards, except .epub which becomes a book
+        card. The type is sniffed from the content, never the supplied
+        filename or part header; anything else is rejected with 415.
+        Text extraction happens asynchronously in the enrichment pipeline, so
+        the card returns immediately with an empty body.
       requestBody:
         required: true
         content:
@@ -256,7 +263,7 @@ paths:
                 file: { type: string, format: binary }
       responses:
         "201":
-          description: created image item
+          description: created item (image, article, or book depending on the uploaded type)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Item" }
@@ -268,15 +275,25 @@ paths:
       operationId: getAsset
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      description: >
+        Streams a stored asset's bytes with the content type recorded at
+        upload. Covers every type POST /assets accepts: images, PDFs, and
+        office documents. Documents and PDFs are served verbatim, so the
+        response is the original file.
       responses:
         "200":
-          description: image bytes
+          description: asset bytes, served with the stored content type
           content:
             image/png: { schema: { type: string, format: binary } }
             image/jpeg: { schema: { type: string, format: binary } }
             image/gif: { schema: { type: string, format: binary } }
             image/webp: { schema: { type: string, format: binary } }
             image/avif: { schema: { type: string, format: binary } }
+            application/pdf: { schema: { type: string, format: binary } }
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document: { schema: { type: string, format: binary } }
+            application/vnd.oasis.opendocument.text: { schema: { type: string, format: binary } }
+            application/rtf: { schema: { type: string, format: binary } }
+            application/epub+zip: { schema: { type: string, format: binary } }
         "404": { description: not found }
   /export:
     get:

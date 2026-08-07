@@ -225,7 +225,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Upload a local image as a first-class image card (multipart field 'file'). */
+        /** @description Upload a local file as a first-class card (multipart field 'file'). Images become image cards; PDFs and office documents (.docx, .odt, .rtf, .epub) become article cards, except .epub which becomes a book card. The type is sniffed from the content, never the supplied filename or part header; anything else is rejected with 415. Text extraction happens asynchronously in the enrichment pipeline, so the card returns immediately with an empty body. */
         post: operations["createAsset"];
         delete?: never;
         options?: never;
@@ -240,6 +240,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description Streams a stored asset's bytes with the content type recorded at upload. Covers every type POST /assets accepts: images, PDFs, and office documents. Documents and PDFs are served verbatim, so the response is the original file. */
         get: operations["getAsset"];
         put?: never;
         post?: never;
@@ -1491,7 +1492,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description created image item */
+            /** @description created item (image, article, or book depending on the uploaded type) */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -1534,7 +1535,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description image bytes */
+            /** @description asset bytes, served with the stored content type */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1545,6 +1546,11 @@ export interface operations {
                     "image/gif": string;
                     "image/webp": string;
                     "image/avif": string;
+                    "application/pdf": string;
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": string;
+                    "application/vnd.oasis.opendocument.text": string;
+                    "application/rtf": string;
+                    "application/epub+zip": string;
                 };
             };
             /** @description not found */
