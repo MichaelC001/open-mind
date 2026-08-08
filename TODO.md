@@ -114,6 +114,25 @@
   seam) only if the per-page seam proves annoying against a real 50-card page.
 
 ## Done (recent)
+- **Deployed to prod 2026-08-08** — PR #67 (document capture), squash-merged as
+  `dd6e70e`. Touched both api and web, so sequential `--build api` then
+  `--build web` + `docker restart cloudflared`. Load peaked 3.98 on the api
+  build, 2.68 on web — both under the <8 rule. Disk 76%→82% (8.2 G free); the
+  jump is the committed 5.2 MB wasm plus a fresh web image, worth watching next
+  deploy. Image IDs prove both rebuilds took: api `23d4d78`→`1547b6a`, web
+  `4df5c92`→`976888e`. **Migration 0023 confirmed applied** — recorded in
+  `schema_migrations` at 12:13:33Z, and `information_schema` shows
+  `items.body_markdown text NULL`. Verified with passing positive *and*
+  negative controls: the public `/architecture` page serves the new
+  `anydoc + wazero` stack row and "documents via anydoc" pipeline note, carries
+  `2026-08-07` with the old `2026-08-03` gone; the api binary contains
+  `docmd: converted output exceeds limit`, `compiling anydoc wasm`, and the
+  embedded `anydoc` module (negative control 0). Routes: `/login` `/`
+  `/architecture` 200, `/feed` `/desk` 307 to the Clerk gate. No errors in
+  either container's log post-deploy.
+  **Not exercised in prod:** no document has actually been uploaded through the
+  live UI — the first real `.docx` will be the first time the wasm module
+  compiles on the box (~3 s, one-off, lazily on first use).
 - **Document capture (2026-08-07)** — upload `.docx`/`.odt`/`.rtf`/`.epub` as
   first-class cards. anydoc compiled to `wasm32-wasip1` and run under wazero
   (`internal/docmd`), mirroring how pdfium already works; the 5.2 MB artefact is
