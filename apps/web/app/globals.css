@@ -94,6 +94,16 @@ body{-webkit-font-smoothing:antialiased}
 }
 @media (prefers-reduced-motion:reduce){.shell-aside,.shell-overlay{transition:none}}
 
+/* Loading placeholder blocks (app/(app)/loading.tsx). Warm ink at low alpha
+   rather than the usual grey shimmer, so a mid-navigation skeleton still reads
+   as paper. The sweep is opt-in via no-preference; reduced motion keeps the
+   static block, which is the informative part. */
+.om-skel{background:rgba(28,26,22,.07)}
+@media (prefers-reduced-motion:no-preference){
+  .om-skel{background:linear-gradient(90deg,rgba(28,26,22,.06) 0%,rgba(28,26,22,.06) 35%,rgba(28,26,22,.11) 50%,rgba(28,26,22,.06) 65%,rgba(28,26,22,.06) 100%);background-size:220% 100%;animation:om-skel-sweep 1.4s ease-in-out infinite}
+  @keyframes om-skel-sweep{0%{background-position:100% 0}100%{background-position:-120% 0}}
+}
+
 /* Stretched-link card: a transparent overlay anchor covers the whole card for
    navigation, while interactive children (colour dots) are raised above it. */
 .card-link{position:absolute;inset:0;z-index:0}

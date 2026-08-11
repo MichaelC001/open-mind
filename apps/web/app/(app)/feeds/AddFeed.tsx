@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { tokens } from "@openmind/ui";
-import type { Feed } from "../../lib/types";
+import type { Feed } from "../../../lib/types";
 
 const { color, font } = tokens;
 

@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { tokens } from "@openmind/ui";
-import { getFeeds } from "../../lib/feeds";
-import { Shell } from "../../components/Shell";
+import { getFeeds } from "../../../lib/feeds";
 import { AddFeed } from "./AddFeed";
 import { DeleteFeedButton } from "./DeleteFeedButton";
 
@@ -63,7 +62,7 @@ export default async function FeedsPage() {
   const feeds = await getFeeds();
 
   return (
-    <Shell>
+    <>
       <div
         style={{
           height: 2,
@@ -167,6 +166,6 @@ export default async function FeedsPage() {
           </ul>
         )}
       </div>
-    </Shell>
+    </>
   );
 }

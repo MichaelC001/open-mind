@@ -1,8 +1,7 @@
 import { tokens } from "@openmind/ui";
-import { Shell } from "../../components/Shell";
-import { PlacesMap } from "../../components/PlacesMap";
-import { apiFetch } from "../../lib/api";
-import type { MapPlace } from "../../lib/types";
+import { PlacesMap } from "../../../components/PlacesMap";
+import { apiFetch } from "../../../lib/api";
+import type { MapPlace } from "../../../lib/types";
 
 const { color, font } = tokens;
 
@@ -23,7 +22,7 @@ export default async function PlacesPage() {
   const subline = `${places.length.toLocaleString("en-GB")} places · ${pinned.length.toLocaleString("en-GB")} on the map`;
 
   return (
-    <Shell activePlaces>
+    <>
       <div
         style={{
           padding: "18px 28px 16px",
@@ -122,6 +121,6 @@ export default async function PlacesPage() {
           )}
         </>
       )}
-    </Shell>
+    </>
   );
 }

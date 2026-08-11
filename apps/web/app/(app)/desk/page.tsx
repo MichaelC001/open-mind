@@ -1,7 +1,6 @@
 import { tokens } from "@openmind/ui";
-import { Grid } from "../../components/Grid";
-import { Shell } from "../../components/Shell";
-import { getDesk } from "../../lib/desk";
+import { Grid } from "../../../components/Grid";
+import { getDesk } from "../../../lib/desk";
 
 const { color, font } = tokens;
 
@@ -11,7 +10,7 @@ export default async function DeskPage() {
   const subline = `${count.toLocaleString("en-GB")} pinned · what you're working with`;
 
   return (
-    <Shell activeDesk>
+    <>
       {/* Gold 2px hairline — the Desk's signature top rule. */}
       <div
         style={{
@@ -63,6 +62,6 @@ export default async function DeskPage() {
           )}
         </div>
       </div>
-    </Shell>
+    </>
   );
 }

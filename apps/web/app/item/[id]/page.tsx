@@ -456,11 +456,14 @@ function ReaderContent({ item }: { item: ItemDetail }) {
 
 export default async function ItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const res = await apiFetch(`/items/${id}`);
+  // Neither call depends on the other, so they go out together — as a sequence
+  // the places round trip was strictly additive to time-to-first-byte.
+  const [res, placesRes] = await Promise.all([
+    apiFetch(`/items/${id}`),
+    apiFetch(`/items/${id}/places`),
+  ]);
   if (!res.ok) notFound();
   const item = (await res.json()) as ItemDetail;
-
-  const placesRes = await apiFetch(`/items/${id}/places`);
   const places: Place[] = placesRes.ok ? await placesRes.json() : [];
 
   return (

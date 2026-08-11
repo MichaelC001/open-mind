@@ -1,7 +1,6 @@
 import { tokens } from "@openmind/ui";
-import { Shell } from "../../components/Shell";
-import { FeedRiver } from "../../components/FeedRiver";
-import { getFeeds } from "../../lib/feeds";
+import { FeedRiver } from "../../../components/FeedRiver";
+import { getFeeds } from "../../../lib/feeds";
 
 const { color } = tokens;
 
@@ -12,7 +11,7 @@ export default async function FeedPage() {
   const feeds = await getFeeds();
 
   return (
-    <Shell activeFeed>
+    <>
       {/* Terracotta 2px hairline — mirrors the Desk's gold rule, this river's own signature. */}
       <div
         style={{
@@ -49,6 +48,6 @@ export default async function FeedPage() {
           both bands: the filter strip sits in the page chrome flush under the
           header (as the Mind's FilterStrip does), the river on the paper below. */}
       <FeedRiver feeds={feeds} />
-    </Shell>
+    </>
   );
 }

@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { tokens } from "@openmind/ui";
-import { Shell } from "../../../components/Shell";
-import { LensForm } from "../../../components/LensForm";
+import { LensForm } from "../../../../components/LensForm";
 
 const { color } = tokens;
 
@@ -15,7 +14,7 @@ export default async function NewLensPage({
   const initialDomains = domains?.split(",").filter(Boolean) ?? [];
 
   return (
-    <Shell>
+    <>
       <div
         style={{
           height: 2,
@@ -45,6 +44,6 @@ export default async function NewLensPage({
           initialDomains={initialDomains}
         />
       </div>
-    </Shell>
+    </>
   );
 }

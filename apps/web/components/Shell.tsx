@@ -1,47 +1,22 @@
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { tokens } from "@openmind/ui";
 import { getLenses } from "../lib/lenses";
-import { lensDot } from "../lib/lens-format";
 import { formatBytes, getAccount } from "../lib/account";
 import { authMode } from "../lib/auth-mode";
 import { ClerkAccountRow } from "./ClerkAccountRow";
 import { TokenAccountRow } from "./TokenAccountRow";
 import { ShellDrawer } from "./ShellDrawer";
+import { ShellNav } from "./ShellNav";
 
-const navBase = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  padding: "7px 10px",
-  borderRadius: 8,
-  fontFamily: tokens.font.sans,
-  fontSize: 13,
-  fontWeight: 500,
-  lineHeight: 1,
-} as const;
-
-const softDivider = { height: 1, background: "rgba(28,26,22,.09)" } as const;
-
-export async function Shell({
-  children,
-  activeLensId,
-  activeDesk,
-  activeDrift,
-  activeFeed,
-  activePlaces,
-}: {
-  children: ReactNode;
-  activeLensId?: string;
-  activeDesk?: boolean;
-  activeDrift?: boolean;
-  activeFeed?: boolean;
-  activePlaces?: boolean;
-}) {
+// Rendered by app/(app)/layout.tsx, not by individual pages. That placement is
+// the point: React keeps a layout mounted across navigations within the group,
+// so the sidebar (and the /lenses + /account fetches behind it) is built once
+// per session rather than re-rendered and re-sent inside every page's payload.
+// Active-nav state moved to ShellNav, which reads it from the pathname.
+export async function Shell({ children }: { children: ReactNode }) {
   // Both are independent and neither throws, so fetch them concurrently rather
   // than making the sidebar wait on two sequential round trips.
   const [lenses, account] = await Promise.all([getLenses(), getAccount()]);
-  const mindActive = !activeLensId && !activeDesk && !activeDrift && !activeFeed && !activePlaces;
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
       <ShellDrawer>
@@ -108,105 +83,7 @@ export async function Shell({
           </span>
         </div>
 
-        {/* The Mind — the home library. Active unless viewing a lens, feed, drift or the desk. */}
-        <Link
-          href="/"
-          style={{
-            ...navBase,
-            textDecoration: "none",
-            background: mindActive ? "rgba(27,63,209,.1)" : "transparent",
-            color: mindActive ? tokens.color.cobalt : tokens.color.ink,
-          }}
-        >
-          <span style={{ fontSize: 15, width: 16 }}>◧</span> The Mind
-        </Link>
-
-        {/* Feed — the reverse-chron river of everything your subscriptions brought in. */}
-        <Link
-          href="/feed"
-          style={{
-            ...navBase,
-            textDecoration: "none",
-            background: activeFeed ? "rgba(27,63,209,.1)" : "transparent",
-            color: activeFeed ? tokens.color.cobalt : tokens.color.ink,
-          }}
-        >
-          <span style={{ fontSize: 15, width: 16 }}>≋</span> Feed
-        </Link>
-
-        {/* Desk — the pinboard of what you're working with. */}
-        <Link
-          href="/desk"
-          style={{
-            ...navBase,
-            textDecoration: "none",
-            background: activeDesk ? "rgba(27,63,209,.1)" : "transparent",
-            color: activeDesk ? tokens.color.cobalt : tokens.color.ink,
-          }}
-        >
-          <span style={{ fontSize: 15, width: 16 }}>◵</span> Desk
-        </Link>
-
-        {/* Drift — calm, finite resurfacing of forgotten saves. */}
-        <Link
-          href="/drift"
-          style={{
-            ...navBase,
-            textDecoration: "none",
-            background: activeDrift ? "rgba(27,63,209,.1)" : "transparent",
-            color: activeDrift ? tokens.color.cobalt : tokens.color.ink,
-          }}
-        >
-          <span style={{ fontSize: 15, width: 16 }}>❍</span> Drift
-        </Link>
-
-        {/* Places — every spot your saves mention, pinned on a map. */}
-        <Link
-          href="/places"
-          style={{
-            ...navBase,
-            textDecoration: "none",
-            background: activePlaces ? "rgba(27,63,209,.1)" : "transparent",
-            color: activePlaces ? tokens.color.cobalt : tokens.color.ink,
-          }}
-        >
-          <span style={{ fontSize: 15, width: 16 }}>⌖</span> Places
-        </Link>
-
-        <div style={{ ...softDivider, margin: "16px 8px" }} />
-
-        <div
-          className="meta"
-          style={{ display: "flex", alignItems: "center", padding: "2px 10px 8px" }}
-        >
-          Lenses
-        </div>
-        {lenses.map((lens) => {
-          const active = lens.id === activeLensId;
-          return (
-            <Link
-              key={lens.id}
-              href={`/lens/${lens.id}`}
-              title={lens.name}
-              style={{
-                ...navBase,
-                textDecoration: "none",
-                background: active ? "rgba(27,63,209,.1)" : "transparent",
-                color: active ? tokens.color.cobalt : tokens.color.ink,
-              }}
-            >
-              <span className="dot" style={{ background: lensDot(lens.rule, tokens.color.cobalt) }} />
-              <span
-                style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-              >
-                {lens.name}
-              </span>
-            </Link>
-          );
-        })}
-        <Link href="/lens/new" style={{ ...navBase, textDecoration: "none", color: tokens.color.inkMuted }}>
-          <span style={{ fontSize: 15, width: 16 }}>+</span> New lens
-        </Link>
+        <ShellNav lenses={lenses} />
 
         {/* Account row. Clerk mode delegates the avatar and every account
             action to Clerk's UserButton; token mode has no identity provider,

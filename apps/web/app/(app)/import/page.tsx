@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { tokens } from "@openmind/ui";
-import { Shell } from "../../components/Shell";
-import { ImportForm } from "../../components/ImportForm";
-import { RaindropImportForm } from "../../components/RaindropImportForm";
+import { ImportForm } from "../../../components/ImportForm";
+import { RaindropImportForm } from "../../../components/RaindropImportForm";
 
 const { color, font } = tokens;
 
@@ -18,7 +17,7 @@ const SOURCES = [
 
 export default function ImportPage() {
   return (
-    <Shell>
+    <>
       <div
         style={{
           height: 2,
@@ -56,6 +55,6 @@ export default function ImportPage() {
           </ul>
         </div>
       </div>
-    </Shell>
+    </>
   );
 }

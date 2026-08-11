@@ -21,9 +21,11 @@ async function sessionToken(): Promise<string | undefined> {
 }
 
 export async function apiFetch(path: string, init?: RequestInit, req?: Request): Promise<Response> {
-  let token = await sessionToken();
+  // A forwarded bearer wins outright, so resolve it first and skip the session
+  // lookup entirely — the /api/* proxy routes are bearer-authed and were paying
+  // for a Clerk auth() call on every request only to discard the result.
   const header = req?.headers.get("authorization");
-  if (header?.startsWith("Bearer ")) token = header.slice(7);
+  const token = header?.startsWith("Bearer ") ? header.slice(7) : await sessionToken();
   const headers = new Headers(init?.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   // Only force JSON for string bodies. FormData/streams (multipart uploads)

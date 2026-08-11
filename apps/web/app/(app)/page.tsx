@@ -1,14 +1,13 @@
 import { tokens } from "@openmind/ui";
-import { apiFetch } from "../lib/api";
-import type { Item, ItemPage, SearchResponse, UnderstoodQuery } from "../lib/types";
-import { Grid } from "../components/Grid";
-import { ItemRiver } from "../components/ItemRiver";
-import { QuickAdd } from "../components/QuickAdd";
-import { ImageDrop } from "../components/ImageDrop";
-import { Shell } from "../components/Shell";
-import { Topbar } from "../components/Topbar";
-import { FilterStrip } from "../components/FilterStrip";
-import { SearchContext } from "../components/SearchContext";
+import { apiFetch } from "../../lib/api";
+import type { Item, ItemPage, SearchResponse, UnderstoodQuery } from "../../lib/types";
+import { Grid } from "../../components/Grid";
+import { ItemRiver } from "../../components/ItemRiver";
+import { QuickAdd } from "../../components/QuickAdd";
+import { ImageDrop } from "../../components/ImageDrop";
+import { Topbar } from "../../components/Topbar";
+import { FilterStrip } from "../../components/FilterStrip";
+import { SearchContext } from "../../components/SearchContext";
 
 async function getRecents(): Promise<ItemPage> {
   try {
@@ -103,7 +102,7 @@ export default async function Page({
   const feedItems = items.filter(isFeedOnly);
 
   return (
-    <Shell>
+    <>
       <Topbar count={items.length} q={q} hasMore={Boolean(recents?.nextCursor)} />
       <FilterStrip active={active} q={q} color={color} domains={domains} />
       <SearchContext
@@ -169,6 +168,6 @@ export default async function Page({
           )}
         </div>
       </div>
-    </Shell>
+    </>
   );
 }

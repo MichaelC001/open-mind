@@ -1,13 +1,12 @@
 import Link from "next/link";
 import { tokens } from "@openmind/ui";
-import { Shell } from "../../../components/Shell";
-import { DevicesKeys } from "../../../components/DevicesKeys";
+import { DevicesKeys } from "../../../../components/DevicesKeys";
 
 const { color } = tokens;
 
 export default function DevicesPage() {
   return (
-    <Shell>
+    <>
       <div
         style={{
           height: 2,
@@ -35,6 +34,6 @@ export default function DevicesPage() {
       <div style={{ padding: "26px 28px 40px" }}>
         <DevicesKeys />
       </div>
-    </Shell>
+    </>
   );
 }

@@ -1,28 +1,28 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { tokens } from "@openmind/ui";
-import { Shell } from "../../../components/Shell";
-import { Grid } from "../../../components/Grid";
-import { DeleteLensButton } from "../../../components/DeleteLensButton";
-import { KindleButton } from "../../../components/KindleButton";
-import { LensDigestControl } from "../../../components/LensDigestControl";
-import { getLens, getLensItems } from "../../../lib/lenses";
-import { lensDot, lensSummary } from "../../../lib/lens-format";
+import { Grid } from "../../../../components/Grid";
+import { DeleteLensButton } from "../../../../components/DeleteLensButton";
+import { KindleButton } from "../../../../components/KindleButton";
+import { LensDigestControl } from "../../../../components/LensDigestControl";
+import { getLens, getLensItems } from "../../../../lib/lenses";
+import { lensDot, lensSummary } from "../../../../lib/lens-format";
 
 const { color, font } = tokens;
 
 export default async function LensPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const lens = await getLens(id);
+  // Fetched together: getLensItems only needs the id, not the resolved lens, so
+  // waiting for the lens first added a round trip for nothing. Both helpers
+  // swallow their own errors, so neither can reject the pair.
+  const [lens, items] = await Promise.all([getLens(id), getLensItems(id)]);
   if (!lens) notFound();
-
-  const items = await getLensItems(id);
   const summary = lensSummary(lens.rule);
   const count = items.length;
   const noun = count === 1 ? "gathering" : "gatherings";
 
   return (
-    <Shell activeLensId={id}>
+    <>
       <div
         style={{
           height: 2,
@@ -85,6 +85,6 @@ export default async function LensPage({ params }: { params: Promise<{ id: strin
           <Grid items={items} />
         </div>
       </div>
-    </Shell>
+    </>
   );
 }
