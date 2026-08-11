@@ -4,6 +4,29 @@
 > [GitHub Issues](../../issues) — file bugs and feature requests there.
 
 ## Now
+- **`gilla.fun` is served from Singapore, not India — this is the single biggest
+  latency cost and it is a billing change, not an engineering one.** Measured
+  2026-08-11 from the Hyderabad box and from an Indian client at the same
+  moment: `openmind.gilla.fun` and `gilla.fun` both resolve to `colo=SIN`, while
+  `shopify.com` gets `HYD`/`MAA` and `cloudflare.com` gets `MAA`/`NAG` — i.e.
+  paid zones get Indian colos, this free zone does not. Consequence: every
+  request detours India → Singapore → India. Same page, measured three ways:
+  **6–16 ms** rendered inside the box, **90–137 ms** from a client over an SSH
+  forward (bypassing Cloudflare), **310 ms warm / 880 ms cold-connection /
+  1465 ms worst** through the tunnel. Client is 20 ms from its nearest CF edge
+  and the box is **1.3 ms** from cloudflared's edge IPs, so the tunnel leg is
+  already optimal and **tuning/restarting `cloudflared` cannot help** — don't
+  bother, it only interrupts every other service on that tunnel. Real options:
+  (a) put the zone on a paid plan → expect ~310 ms to fall to ~60–90 ms;
+  (b) unproxied DNS + TLS on the box (Caddy/LE) → the measured ~90–137 ms, but
+  exposes the box IP and drops the WAF/DDoS layer; (c) leave it — the web app no
+  longer *waits* on this latency (see Done, 2026-08-11).
+  Backend is emphatically not the problem: Postgres 0.2 ms on the `/items` list
+  (index scan on `items_user_created_id_idx`, 1510 rows), Go API <1 ms, box idle
+  at 0.29/4 CPUs with 19 GB free.
+- **Tunnel token sits in plaintext in `docker inspect cloudflared`** — it's an
+  inline `--token eyJ...` run arg, so anyone with docker access on the box reads
+  it. Move to a credentials file or a docker secret and rotate.
 - **Pre-scrub history still reachable on the now-public repo.** `refs/pull/1..6/head`
   remain fetchable anonymously; unshallowed they expose 247 of the 298 pre-scrub
   commits, so the squash is largely undone for anyone who fetches them. Verified
@@ -114,6 +137,29 @@
   seam) only if the per-page seam proves annoying against a real 50-card page.
 
 ## Done (recent)
+- **Web navigation perf, 2026-08-11 (`96b5c2f`, branch `perf/web-nav-shell-layout`) —
+  committed, NOT yet deployed.** Navigation stalled 310–900 ms with no feedback
+  at all. The app had **zero** loading boundaries and zero `Suspense`, every
+  route is dynamic (`apiFetch` reads cookies), and `Shell` was rendered by each
+  of the 9 pages rather than a layout — so every click re-rendered the sidebar,
+  re-sent it in the page's RSC payload, re-issued `/lenses` + `/account`, and
+  showed the old page frozen until the round trip finished. Fixed by moving the
+  9 pages into an `app/(app)/` route group whose layout owns `Shell` (URLs
+  unchanged — parenthesised group), adding `app/(app)/loading.tsx` (masthead +
+  card-grid skeleton in the main column; only possible because Shell is a layout
+  now), `prefetch={true}` on the primary nav links (default "auto" only warms the
+  shell for dynamic routes, so clicks still paid full latency), and
+  `experimental.staleTimes {dynamic:30, static:300}` — Next 15 defaults `dynamic`
+  to 0, which was discarding every prefetched payload the instant it landed.
+  Active-nav state moved to `ShellNav` via `usePathname()`, which also stops "The
+  Mind" highlighting on `/feeds`, `/import`, `/lens/new`, `/settings/devices`.
+  Side fixes: `item/[id]` and `lens/[id]` were awaiting two independent fetches
+  in sequence (now `Promise.all`), and `apiFetch` resolved a Clerk session token
+  on every call only to discard it whenever a bearer header was forwarded.
+  Verified: `tsc --noEmit` clean, 82/82 tests, production build succeeds with
+  every route at its original path. **Not yet verified in prod** — needs a web
+  rebuild + `docker restart cloudflared`, and the perceived win should be
+  re-measured on the box afterwards.
 - **Deployed to prod 2026-08-08** — PR #67 (document capture), squash-merged as
   `dd6e70e`. Touched both api and web, so sequential `--build api` then
   `--build web` + `docker restart cloudflared`. Load peaked 3.98 on the api
