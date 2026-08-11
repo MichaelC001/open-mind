@@ -137,8 +137,49 @@
   seam) only if the per-page seam proves annoying against a real 50-card page.
 
 ## Done (recent)
-- **Web navigation perf, 2026-08-11 (`96b5c2f`, branch `perf/web-nav-shell-layout`) —
-  committed, NOT yet deployed.** Navigation stalled 310–900 ms with no feedback
+- **Deployed to prod 2026-08-11** — the web nav perf work below (`96b5c2f` +
+  `be9301d`, fast-forwarded onto `main`). Web-only, so `--build web` +
+  `docker restart cloudflared`. Load peaked 2.36 (well under the <8 rule), disk
+  70%→72% (13 G free). Image ID proves the rebuild took: `976888e2`→`e2861f63`.
+  Verified: served CSS chunk hash changed `31fb1fad`→`fc15efbb` and contains
+  both `.om-skel` rules plus the `om-skel-sweep` keyframes (positive control
+  `.shell-hamburger` present, negative control 0); `om-skel` + `aria-busy`
+  present in the built server chunk `6621.js`, so `loading.tsx` compiled in;
+  `(app)` group dir present in `.next/server/app`. Routes: `/login` `/`
+  `/architecture` `/privacy` `/welcome` 200, and `/desk` `/feed` `/places`
+  `/lens/new` `/settings/devices` all 307 to the Clerk gate — i.e. every moved
+  route still resolves at its original URL.
+  **DEPLOY GOTCHA (now in the deploy skill):** this was a **file-move** change,
+  and the house rsync deliberately omits `--delete`, so the old `app/desk`,
+  `app/feed`, `app/page.tsx` … would have stayed on the box alongside the new
+  `app/(app)/…` copies and collided as duplicate routes. Fixed with a second,
+  scoped `rsync -az --delete` over `apps/web/app/` only (nothing server-only
+  lives under there).
+  **Not verified:** the perceived speed-up itself is behind the Clerk gate, so it
+  was not observed end-to-end — needs an eyeball. TTFB is unchanged **by design**
+  (310–450 ms warm; the change hides that latency, it does not remove it).
+  Absolute numbers taken right after the deploy looked worse (1050–1791 ms)
+  purely because the measuring client's own link had degraded — RTT to the box
+  went 40–53 ms → 91–223 ms mid-session; the warm reused-connection cost was
+  still 319–469 ms, matching the pre-deploy ~310 ms. Not a regression.
+- **Upgrading Next.js will NOT fix the latency — checked 2026-08-11, don't
+  re-raise as a perf fix.** We're on 15.5.20; latest is 16.3.0. The upgrade is
+  *feasible* (Clerk 7.7.3 peers `^16.0.10 || ^16.1.0-0`, so 16.3.0 satisfies it;
+  React `^19` already meets Next 16's peer; no `next` advisories — the
+  `pnpm audit` hits are transitive `brace-expansion` under
+  `packages/api-client` → `openapi-typescript`) and worth doing on its own merits
+  (Turbopack default = faster builds; with PPR, `loading.tsx` stops being a hard
+  prefetch cut-off). But it cannot help *this* problem: of the ~350 ms per
+  navigation the origin contributes ~15 ms (render 6–16 ms, API <1 ms), so there
+  is nothing for a framework to reclaim. The one Next 16 feature that would have
+  helped — PPR's **CDN-cached static shell**, where the CDN serves the shell and
+  sends a resume request to the origin — requires the CDN to implement Next's PPR
+  adapter protocol (`onCacheEntryV2`, postponed state, shell+stream
+  concatenation; see Next's "ppr-platform-guide"). Vercel does that; Cloudflare
+  in front of a self-hosted tunnel does not. Self-hosted, PPR only buys
+  shell-first streaming *from the origin* — ~10 ms of the ~350 ms.
+- **Web navigation perf, 2026-08-11 (`96b5c2f`, branch `perf/web-nav-shell-layout`).**
+  Navigation stalled 310–900 ms with no feedback
   at all. The app had **zero** loading boundaries and zero `Suspense`, every
   route is dynamic (`apiFetch` reads cookies), and `Shell` was rendered by each
   of the 9 pages rather than a layout — so every click re-rendered the sidebar,
