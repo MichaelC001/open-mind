@@ -137,6 +137,38 @@
   seam) only if the per-page seam proves annoying against a real 50-card page.
 
 ## Done (recent)
+- **Deployed to prod 2026-08-11 (second deploy of the day) — Next.js 15.5.20 →
+  16.3.0.** Done for Turbopack + staying current, **not** for latency, and it
+  duly delivered zero latency change: warm reused-connection TTFB 303–315 ms
+  against 319–469 ms before (measuring client's RTT back to a normal
+  47–54 ms), in-box render 11–27 ms against 6–23 ms. The Cloudflare SIN routing
+  remains the floor, exactly as predicted below.
+  Migration, all per the official upgrade guide: `middleware.ts` → **`proxy.ts`**
+  via the `middleware-to-proxy` codemod (Next deprecated the `middleware`
+  convention in 15.6; Clerk documents `proxy.ts` as the Next 16+ convention, so
+  this is the blessed path); Next rewrote `tsconfig.json` (`jsx` "preserve" →
+  "react-jsx", `.next/dev/types` added to `include`) and `next-env.d.ts`
+  (imports + `root-params.d.ts`) — left in Next's generated formatting on
+  purpose, since re-compacting it just gets rewritten next build; CI web job
+  Node 20 → 22 to match `apps/web/Dockerfile` (Next 16 needs ≥20.9.0, so "20"
+  passed only by resolving to the latest 20.x, and this repo has been bitten by
+  CI/local skew before); `/architecture` data now says Next.js 16 with
+  `LAST_UPDATED` 2026-08-11.
+  Not applicable: `next lint` (we typecheck with `tsc`), `unstable_` prefixes
+  (none), `experimental.turbopack` config (none set). **`cacheComponents`/PPR
+  deliberately NOT enabled** — it needs every dynamic read wrapped in Suspense
+  and cannot help our latency anyway.
+  **`experimental.staleTimes` survives** — the build lists it under
+  "Experiments", so the prefetch work from `96b5c2f` is intact. Verified:
+  Turbopack builds clean on arm64 **musl** (the risk point) in 24 s, image
+  `e2861f63`→`aae1f6a3`, load peaked 1.60, disk 72%; `tsc` clean, 82/82 tests;
+  `/architecture` publicly serves "Next.js 16" ×4 with zero "Next.js 15" and the
+  new `2026-08-11` date; `.om-skel` + `om-skel-sweep` still in the Turbopack CSS
+  chunk (positive control present, negative 0); build reports
+  `ƒ Proxy (Middleware)`; all 14 checked routes correct (public 200, gated 307);
+  **zero** error/warn lines in the web log; api container untouched.
+  **Not verified:** anything behind the Clerk gate — same gap as the first
+  deploy, needs an eyeball.
 - **Deployed to prod 2026-08-11** — the web nav perf work below (`96b5c2f` +
   `be9301d`, fast-forwarded onto `main`). Web-only, so `--build web` +
   `docker restart cloudflared`. Load peaked 2.36 (well under the <8 rule), disk
@@ -162,9 +194,9 @@
   purely because the measuring client's own link had degraded — RTT to the box
   went 40–53 ms → 91–223 ms mid-session; the warm reused-connection cost was
   still 319–469 ms, matching the pre-deploy ~310 ms. Not a regression.
-- **Upgrading Next.js will NOT fix the latency — checked 2026-08-11, don't
-  re-raise as a perf fix.** We're on 15.5.20; latest is 16.3.0. The upgrade is
-  *feasible* (Clerk 7.7.3 peers `^16.0.10 || ^16.1.0-0`, so 16.3.0 satisfies it;
+- **Upgrading Next.js did NOT fix the latency — checked and then actually done
+  2026-08-11 (we are now on 16.3.0); don't re-raise a framework bump as a perf
+  fix.** The upgrade was *feasible* (Clerk 7.7.3 peers `^16.0.10 || ^16.1.0-0`, so 16.3.0 satisfies it;
   React `^19` already meets Next 16's peer; no `next` advisories — the
   `pnpm audit` hits are transitive `brace-expansion` under
   `packages/api-client` → `openapi-typescript`) and worth doing on its own merits
