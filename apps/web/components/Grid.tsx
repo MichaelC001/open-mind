@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { tokens } from "@openmind/ui";
 import type { Item } from "../lib/types";
 import { ItemCard } from "./ItemCard";
+import { CardLink } from "./CardLink";
 
 export function Grid({ items, colorActive }: { items: Item[]; colorActive?: boolean }) {
   if (items.length === 0) {
@@ -45,12 +45,7 @@ export function Grid({ items, colorActive }: { items: Item[]; colorActive?: bool
             />
           ) : null}
           <ItemCard item={item} />
-          <Link
-            href={`/item/${item.id}`}
-            aria-label={item.title ?? "Open item"}
-            className="card-link"
-            style={{ color: "inherit", textDecoration: "none" }}
-          />
+          <CardLink href={`/item/${item.id}`} label={item.title ?? "Open item"} />
         </article>
       ))}
     </div>
