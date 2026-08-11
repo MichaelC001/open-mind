@@ -137,6 +137,42 @@
   seam) only if the per-page seam proves annoying against a real 50-card page.
 
 ## Done (recent)
+- **Deployed to prod 2026-08-11 (third deploy) — card-click navigation.** The
+  first deploy fixed *sidebar* navigation and left the app's most travelled
+  navigation untouched: clicking a card in the grid. `/item/[id]` sits outside
+  the `(app)` group on purpose (no sidebar), so `app/(app)/loading.tsx` never
+  covered it — a card click still froze the grid for the whole ~310 ms round trip
+  with no feedback, i.e. the original complaint, unfixed, on the most common
+  path. Added `app/item/[id]/loading.tsx` (article-shaped: 980px centred card,
+  terracotta hairline, 16/9 image well, kicker, two title lines, prose lines at
+  uneven widths — also covers `/item/[id]/read` as the parent boundary) and
+  `app/drift/loading.tsx` (Drift is likewise outside the group and server-fetches
+  its whole batch before `DriftFlow` renders anything).
+  Card links now warm **on intent**: `Grid`'s stretched anchor moved to a
+  `CardLink` client component that flips `Link`'s `prefetch` on pointer-enter or
+  focus. `prefetch={true}` on every card was the obvious move and the wrong one —
+  a grid renders up to 50 cards, and fully rendering 50 item pages per view is
+  far more traffic than the one page actually opened, competing with the page
+  you're looking at over a 310 ms link.
+  **Verified in a real browser** (Playwright) against `/spike/grid` — 500
+  synthetic cards, auth-free, real `Grid` + real `ItemCard` — built in token mode
+  so Clerk's client JS didn't redirect to `/login`: on load, **zero** `/item/`
+  requests (no eager flood); after hovering one card, RSC prefetches fired for
+  exactly that href and no other. Hovering costs two requests (Next's own hover
+  prefetch is partial-only for a dynamic route; the prop flip is what fetches the
+  page data), once per card, then `staleTimes.static` holds it 5 min.
+  Deploy: image `aae1f6a3`→`c48fee08`, load peaked 2.12, disk 72%. All three
+  loading chunks present in the built server output — `(app)`, `item`, `drift` —
+  with `om-skel` in exactly 3 chunks, positive control present, negative 0; zero
+  error lines in the web log; 11 routes checked correct. Still **not verified**
+  behind the Clerk gate.
+- **Build depends on network access to Google Fonts.** `lib/fonts.ts` uses
+  `next/font/google` for all three families, so they are downloaded at build
+  time — a transient network blip fails the whole build with a confusing
+  "Warning: Error while requesting resource" / "Turbopack build failed with 9
+  errors". Hit once locally 2026-08-11 and passed on immediate retry. Not a Next
+  16 regression (same in 15). If a box build ever fails this way, just retry;
+  self-hosting fixes would be to vendor the fonts locally.
 - **Deployed to prod 2026-08-11 (second deploy of the day) — Next.js 15.5.20 →
   16.3.0.** Done for Turbopack + staying current, **not** for latency, and it
   duly delivered zero latency change: warm reused-connection TTFB 303–315 ms
