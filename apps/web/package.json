@@ -14,7 +14,7 @@
     "@openmind/api-client": "workspace:*",
     "@openmind/ui": "workspace:*",
     "maplibre-gl": "^5.24.0",
-    "next": "^15.0.0",
+    "next": "^16.3.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
