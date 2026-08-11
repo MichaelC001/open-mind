@@ -67,7 +67,7 @@ function legacyMiddleware(req: NextRequest) {
   return NextResponse.next();
 }
 
-export function middleware(req: NextRequest, event: NextFetchEvent) {
+export function proxy(req: NextRequest, event: NextFetchEvent) {
   if (authMode === "clerk") {
     // Everything flows through clerkMiddleware so auth() works in proxy
     // routes; self-authed paths are exempted from protect() inside it.

@@ -56,7 +56,11 @@ jobs:
           version: 10.12.1
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Matches apps/web/Dockerfile (node:22-alpine) so CI validates the
+          # same runtime the production image builds on. Next 16 requires
+          # >=20.9.0, so plain "20" only passed by virtue of resolving to the
+          # latest 20.x — too close to the floor to leave to chance.
+          node-version: 22
           cache: pnpm
       - name: Install
         run: pnpm install --frozen-lockfile
