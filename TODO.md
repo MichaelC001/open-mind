@@ -112,7 +112,69 @@
   discards the map on error; separately, `ListRecentTickets` `LIMIT 5000`
   without `ORDER BY` makes reconciliation arbitrary above 5000 tickets/hour —
   add `ORDER BY sent_at`.
-- Dock follow-ups: tray Desk submenu, Win/Linux tab-grab, hotkey rebinding, DMG/notarisation
+- Dock follow-ups: Win/Linux tab grab (no AppleScript equivalent — would need
+  per-browser platform work or a bridge through the extension); unify the two
+  HTTP paths to `POST /api/items` (Rust reqwest at 15s, TS plugin-http at 12s)
+  behind one Rust `save_item` command so the queue cannot be bypassed — that
+  unification is also the natural place to add the duplicate-recovery guard
+  mobile already has (`apps/mobile/app/(tabs)/capture.tsx` checks, after a
+  status-0 failure, whether that exact URL was created since the attempt
+  began before enqueueing; the dock enqueues unconditionally, and the API
+  doesn't dedupe on create, so a POST that times out after the server
+  committed produces a duplicate when the queue retries — needs an extra GET
+  plus a decision about note saves, so not done here); verify the remaining
+  seven newly-added browser bundle ids against real installs (Safari
+  Technology Preview, Orion, Vivaldi, Opera, Chrome Beta/Dev/Canary — the
+  original five have been in production use since the first dock release;
+  Chromium's bundle id was additionally confirmed by direct lookup)
+- **Dock: three pre-existing bugs found by running the app on 2026-08-13, all
+  shipped in 0.3.0 and none from the offline-queue work.** Recorded because the
+  shape of them recurs:
+  - **`core:default` grants no mutating window command.** `core:window`'s default
+    permission set is 28 read-only commands, so `start_dragging`, `hide`, `show`,
+    and `set_focus` each needed granting by name. Consequence: the panel could
+    never be dragged (broken since the initial public release) and never hid
+    itself — `hide` has five call sites, including Esc, and none worked. These
+    fail with **no Rust-side trace at all**: the ACL rejection goes to the webview
+    console, so the only symptom is "the button does nothing". A test in `lib.rs`
+    now asserts all four by name. **Any new `getCurrentWindow().<verb>()` call
+    needs a matching permission — check before assuming it works.**
+  - **keyring 3.x cannot persist on macOS 26.** `set_password` returns `Ok` and
+    nothing lands in any keychain API. Fixed by bumping to keyring 4 (the `v1`
+    feature keeps the API identical). Worth re-testing persistence after any
+    future macOS major upgrade.
+- Dock queue polish, all deliberately deferred from the 2026-08-12 pass and none
+  urgent — a whole-branch review found and triaged each:
+  - **`lib.rs`'s `open_item` logs a `tauri_plugin_opener::Error` whose `Display`
+    interpolates the URL** (`ForbiddenUrl { url, .. }`), i.e. `{instance_url}/item/{id}`.
+    Harmless while it was debug-only, but that pass turned release logging **on**,
+    so a self-hosted instance hostname can now reach a user's log file. No token
+    or body, so not a constraint breach — still worth making content-free.
+  - A revoked token now sets `lastError` on the stalled entry, but `PendingStrip`
+    only renders `lastError` when the strip is **expanded**, and `attempts` is
+    deliberately not bumped (so `stuck` stays false). A user who never clicks the
+    chevron sees a plain gold "N saves waiting to sync" indefinitely. Surfacing
+    it on the collapsed row would finish the job.
+  - At the 100-entry cap, `enqueue_and_notify` reports "N pending" while cap
+    eviction has just silently dropped the oldest capture. Mirrors mobile by
+    design, but it is the last capture-loss path on the Rust side.
+  - `build_menu` calls `settings_get()` on every tray rebuild purely to test a
+    boolean, materialising and discarding the keychain token each time — and the
+    rebuild now runs on every panel focus. A `settings_configured()` that reads
+    only the URL entry would be faster and better secret hygiene.
+  - `insert()` hardcodes `persisted: true` and is correct only because `enqueue`
+    overwrites it; a pessimistic `false` default would fail safe, at the cost of
+    flipping four test assertions.
+  - `spawn_persister` has no force-flush on quit, so quitting within 500 ms of a
+    move loses that geometry (reverts to the previously saved position).
+    `write_saved` also uses a bare `let _ = fs::write`, so disk errors are silent
+    — unlike `queue.rs`, which logs and writes atomically.
+  - `subscribeQueue`'s effect can run its cleanup before the listen promise
+    resolves, leaving the listener attached. It matches three pre-existing
+    effects in `Panel.tsx`; harden all four together or none.
+  - Pre-existing: `lib.rs`'s `shortcuts.json` parse warning interpolates `{e}`
+    (no secret in that file), and a keyring error string is surfaced raw in a
+    user-facing notification.
 - `repo` card type: the reserved-first-segment denylist in
   `apps/api/internal/enrich/classify.go` (and its SQL twin in migration 0021)
   is not exhaustive by construction. When a forge adds a reserved route, URLs
@@ -137,6 +199,14 @@
   seam) only if the per-page seam proves annoying against a real 50-card page.
 
 ## Done (recent)
+- Dock functional polish (2026-08-12) — durable offline save queue (Rust-owned,
+  policy mirrored from mobile's `capture-queue.ts`: cap 100, URL dedupe,
+  oldest-first flush, 401 stops the pass, permanent 4xx dropped, transient
+  bumps attempts and stops), pending strip in the panel, tray Desk submenu +
+  pending count, resizable panel with clamped size/position memory, and eight
+  more browsers in the tab grab. Spec:
+  `docs/superpowers/specs/20260811-dock-functional-polish-design.md`.
+  **⌘⇧S previously discarded a capture outright on a network error.**
 - **Deployed to prod 2026-08-11 (third deploy) — card-click navigation.** The
   first deploy fixed *sidebar* navigation and left the app's most travelled
   navigation untouched: clicking a card in the grid. `/item/[id]` sits outside

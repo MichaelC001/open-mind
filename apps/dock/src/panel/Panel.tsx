@@ -1,5 +1,6 @@
 import { Component, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ErrorInfo, KeyboardEvent, ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -9,8 +10,12 @@ import { IconButton, SettingsIcon } from "../components/SettingsIcon";
 import { saveItem, searchItems, setUserTags, listDesk, listRecent, type Item, type SearchResult } from "../lib/api";
 import { mergeHomeLists } from "../lib/home-lists";
 import { detectMode } from "../lib/input-mode";
+import { enqueueCapture, flushQueue, listQueue, removeQueued, subscribeQueue, type QueuedCapture } from "../lib/queue";
 import { getSettings, type Settings } from "../lib/settings";
 import { confirmReduce, parseTags, type ConfirmState } from "../lib/save-confirm";
+import { host } from "../lib/url";
+import { ConfirmStrip } from "./ConfirmStrip";
+import { PendingStrip } from "./PendingStrip";
 import { SettingsView } from "./SettingsView";
 
 type ViewMode = "settings" | "main";
@@ -21,15 +26,6 @@ const SEARCH_DEBOUNCE_MS = 250;
 const HOME_RECENT_FETCH = 16; // fetch extra so merge can still fill 8 after desk dedupe
 const CONFIRM_IDLE_MS = 5_000;
 const CONFIRM_DONE_MS = 800;
-
-/** Best-effort hostname for display; falls back to the raw string. */
-function host(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
 
 function statusMessage(status: number): string {
   if (status === 401) return "Token rejected — open Settings";
@@ -124,6 +120,7 @@ export function Panel() {
   const [homeEpoch, setHomeEpoch] = useState(0);
   const [confirm, setConfirm] = useState<ConfirmState>({ kind: "hidden" });
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [pending, setPending] = useState<QueuedCapture[]>([]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmInputRef = useRef<HTMLInputElement>(null);
@@ -207,6 +204,11 @@ export function Panel() {
             inputRef.current?.focus();
           }
           bumpHome();
+          // Coming back to the panel is a good moment to retry: it usually
+          // means the machine woke or the network came back. It is also when
+          // the tray Desk submenu is refreshed, in place of a background timer.
+          void flushQueue();
+          void invoke("desk_refresh").catch(() => {});
         }
       })
       .then((fn) => {
@@ -226,6 +228,16 @@ export function Panel() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listen("open-settings", () => setView("settings")).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  // Rust owns the queue; mirror it here for the strip.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listQueue().then(setPending);
+    void subscribeQueue(setPending).then((fn) => {
       unlisten = fn;
     });
     return () => unlisten?.();
@@ -523,8 +535,25 @@ export function Panel() {
       }
       if (res.status === 401) {
         showErrorToast("Token rejected — open Settings");
-      } else if (res.status === 0) {
-        showErrorToast("Instance unreachable");
+      } else if (res.status === 0 || res.status === 429 || res.status >= 500) {
+        const offline = res.status === 0;
+        try {
+          // Never lose the capture — queue it and let the strip explain.
+          const result = await enqueueCapture(body);
+          if (!result.persisted) {
+            // The queue accepted it in memory but the disk write failed, so
+            // it will not survive a quit. Do not promise a retry.
+            showErrorToast("Couldn't queue the save — try again");
+          } else {
+            showErrorToast(
+              offline ? "Saved offline — will retry" : "Instance error — queued, will retry",
+            );
+          }
+        } catch {
+          // The queue itself failed, so nothing is holding this capture.
+          // Say so plainly rather than implying it is safe.
+          showErrorToast("Couldn't queue the save — try again");
+        }
       } else {
         showErrorToast(`Save failed (${res.status})`);
       }
@@ -638,7 +667,7 @@ export function Panel() {
 
   return (
     <div style={styles.shell}>
-      <PanelDragStrip />
+      <PanelDragStrip onClose={() => void getCurrentWindow().hide()} />
       <div style={styles.inputRow}>
         <input
           ref={inputRef}
@@ -664,35 +693,23 @@ export function Panel() {
         <div style={styles.understood}>Understood as “{understood}”</div>
       ) : null}
 
-      {confirm.kind !== "hidden" ? (
-        <div style={styles.confirmStrip}>
-          <span style={styles.confirmTitle}>Saved — {confirmTitleRef.current}</span>
-          {confirm.kind === "done" ? (
-            <span style={styles.confirmDone}>Tagged ✓</span>
-          ) : (
-            <>
-              <input
-                ref={confirmInputRef}
-                style={styles.confirmInput}
-                value={confirm.kind === "confirming" || confirm.kind === "saving-tags" ? confirm.tags : ""}
-                onChange={(e) => {
-                  setConfirmError(null);
-                  dispatchConfirm({ type: "type-tags", tags: e.target.value });
-                }}
-                onKeyDown={onConfirmTagKeyDown}
-                placeholder="Add tags…"
-                disabled={confirm.kind === "saving-tags"}
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-              />
-              <span style={{ ...styles.confirmHint, ...(confirmError ? { color: tokens.color.danger } : {}) }}>
-                {confirmError ?? (confirm.kind === "saving-tags" ? "Saving…" : "Enter to tag · Esc to skip")}
-              </span>
-            </>
-          )}
-        </div>
-      ) : null}
+      <ConfirmStrip
+        confirm={confirm}
+        title={confirmTitleRef.current}
+        error={confirmError}
+        inputRef={confirmInputRef}
+        onChangeTags={(value) => {
+          setConfirmError(null);
+          dispatchConfirm({ type: "type-tags", tags: value });
+        }}
+        onKeyDown={onConfirmTagKeyDown}
+      />
+
+      <PendingStrip
+        items={pending}
+        onRetry={() => void flushQueue()}
+        onDiscard={(id) => void removeQueued(id)}
+      />
 
       <div style={styles.body}>
         {toast?.kind === "saved" ? (
@@ -797,8 +814,8 @@ export function Panel() {
 
 const styles: Record<string, CSSProperties> = {
   shell: {
-    width: 640,
-    height: 420,
+    width: "100%",
+    height: "100vh",
     boxSizing: "border-box",
     display: "flex",
     flexDirection: "column",
@@ -826,45 +843,6 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 18,
     fontFamily: tokens.font.sans,
     color: tokens.color.ink,
-  },
-  confirmStrip: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "8px 16px",
-    borderBottom: `1px solid ${tokens.color.hairline}`,
-    background: tokens.color.noteSurface,
-  },
-  confirmTitle: {
-    fontSize: 13,
-    fontWeight: 600,
-    color: tokens.color.ink,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    maxWidth: "40%",
-  },
-  confirmInput: {
-    flex: 1,
-    border: `1px solid ${tokens.color.hairline}`,
-    borderRadius: 8,
-    background: tokens.color.cardSurface,
-    color: tokens.color.ink,
-    fontSize: 13,
-    fontFamily: tokens.font.sans,
-    padding: "6px 10px",
-    minWidth: 0,
-  },
-  confirmHint: {
-    fontFamily: tokens.font.mono,
-    fontSize: 10,
-    color: tokens.color.inkFaint,
-    whiteSpace: "nowrap",
-  },
-  confirmDone: {
-    fontSize: 13,
-    fontWeight: 600,
-    color: tokens.color.green,
   },
   understood: {
     fontFamily: tokens.font.mono,
