@@ -205,6 +205,29 @@
   seam) only if the per-page seam proves annoying against a real 50-card page.
 
 ## Done (recent)
+- **Deployed to prod 2026-08-21 (fourth deploy) — instant search (PR #69).**
+  Web-only rebuild plus the mandatory `cloudflared` restart; the api image was
+  not touched. Verified from outside: `/architecture` serves the new
+  `LAST_UPDATED` (2026-08-20) and the new "Search (client)" stack row with the
+  old 2026-08-12 date gone, and the new `::view-transition-group(*)` rule is in
+  the shipped CSS chunk (checked with a passing positive control, so the zero on
+  the negative control means something). `/login`, `/`, `/architecture` 200, app
+  routes 307 to the Clerk gate, `/api/*` 401 through the proxy and the api port
+  unreachable publicly. **The instant-search behaviour itself was not observed
+  end-to-end** — it lives behind the Clerk gate, so what is proven is that the
+  new build is live, not that typing feels right; worth an eyeball while logged
+  in.
+  Two things learned, both worth knowing before the next deploy:
+  - **`docker compose up -d --build web` also recreated the `db` container**,
+    which knocked River's notifier and job producers off their connections for
+    about 16 seconds (`57P01`, then `57P03` while Postgres came back up). It
+    self-healed after the backoff and there were no errors 2 minutes later —
+    and the same thing happened on 2026-08-20 06:56 — but a "web-only" deploy
+    is evidently not db-neutral on this box, so expect an enrichment blip.
+  - **The deploy skill's CSS-grep recipe is stale for Next 16.** It looks for
+    `/_next/static/css/*.css`; Turbopack emits `/_next/static/chunks/*.css`, so
+    the recipe reads 0 matches on a perfectly good deploy. The skill's own
+    advice — always run a positive control — is what caught it.
 - **Instant search in the Mind (2026-08-20)** — every keystroke is answered from
   a local index of the library rather than a round trip, and the server's hybrid
   ranking replaces that answer when it lands. Measured against a mock API
